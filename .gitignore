@@ -1,0 +1,4 @@
+.claude/
+*.wav
+ref/
+.DS_Store
