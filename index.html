@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>piano-synth — piano roll &amp; physically modelled piano</title>
+<meta name="description" content="A small piano roll with a physically modelled grand piano. Draw notes, press play, share the song as a link.">
+<meta name="theme-color" content="#171310">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171310'/%3E%3Crect x='5' y='8' width='22' height='16' rx='2' fill='%23f6ead8'/%3E%3Cpath d='M10.5 8v10M16 8v10M21.5 8v10' stroke='%23171310' stroke-width='3'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand" title="piano-synth">
+    <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect x="4" y="7" width="24" height="18" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M10 7v11M16 7v11M22 7v11" stroke="currentColor" stroke-width="3"/></svg>
+    <span>piano-synth</span>
+  </div>
+  <input id="title" class="title" type="text" maxlength="80" spellcheck="false" aria-label="Song title" placeholder="Song title">
+  <div class="transport">
+    <button id="play" class="btn primary" title="Play / stop (Space)"><span class="ico" id="playIco">▶</span><span id="playLbl">Play</span></button>
+    <button id="loop" class="btn toggle" title="Loop (L): the region dragged in the bar ruler, or the whole song" aria-pressed="false">Loop</button>
+    <label class="field bpm" title="Tempo">
+      <input id="bpm" type="number" min="30" max="300" step="1" inputmode="numeric" aria-label="Tempo in BPM"><span>bpm</span>
+    </label>
+    <label class="check" title="Humanize: timing and loudness drift, phrases breathe, the ending slows down, the melody is brought out. Off: the notes are played exactly as written.">
+      <input id="humanOn" type="checkbox"><i></i><span>Humanize</span>
+    </label>
+    <canvas id="meter" width="64" height="22" aria-hidden="true"></canvas>
+  </div>
+  <div class="spacer"></div>
+  <div class="menuwrap" id="demoWrap">
+    <button id="demoBtn" class="btn" aria-haspopup="true" aria-expanded="false" title="Demo songs">Demos <span class="caret">▾</span></button>
+    <div id="demoMenu" class="menu demos" hidden></div>
+  </div>
+  <button id="share" class="btn accent" title="Copy a link to this song">Share link</button>
+  <div class="menuwrap">
+    <button id="menuBtn" class="btn" aria-haspopup="true" aria-expanded="false" title="More">☰</button>
+    <div id="menu" class="menu" hidden>
+      <button data-act="new">New song</button>
+      <div class="menusep"></div>
+      <button data-act="midiIn" title="Or drop a .mid file on the page">Import MIDI…</button>
+      <button data-act="midiOut" title="The notes and the pedal as written, without Humanize">Export MIDI</button>
+      <button data-act="wav" title="As played, with Humanize, reverb and delay">Export WAV</button>
+      <div class="menusep"></div>
+      <button data-act="help">Keyboard shortcuts</button>
+      <a href="https://github.com/P-i-N/piano-synth" target="_blank" rel="noopener">Source on GitHub</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="rollwrap">
+    <div class="roll" id="roll" tabindex="0" aria-label="Piano roll"></div>
+    <div class="rollbar">
+      <button class="btn small" id="zoomOut" title="Zoom out (−, or Ctrl + wheel)">−</button>
+      <button class="btn small" id="zoomIn" title="Zoom in (+, or Ctrl + wheel)">+</button>
+      <span class="hint" id="status"></span>
+    </div>
+  </section>
+
+  <aside class="panel" id="panel">
+    <details open>
+      <summary>Piano</summary>
+      <div id="instSliders" class="sliders"></div>
+    </details>
+    <details open>
+      <summary>Player</summary>
+      <div id="playerSliders" class="sliders"></div>
+    </details>
+    <details open>
+      <summary>Reverb <label class="switch"><input type="checkbox" id="revOn"><i></i></label></summary>
+      <div class="row"><span class="lbl">Space</span><select id="revSpace" aria-label="Reverb space"></select></div>
+      <div id="revSliders" class="sliders"></div>
+    </details>
+    <details open>
+      <summary>Delay <label class="switch"><input type="checkbox" id="dlyOn"><i></i></label></summary>
+      <div class="row">
+        <span class="lbl">Time</span>
+        <div class="seg small" id="dlyTime">
+          <button data-v="4">1/4</button><button data-v="8d">1/8.</button><button data-v="8">1/8</button><button data-v="8t">1/8T</button><button data-v="16">1/16</button>
+        </div>
+      </div>
+      <div id="dlySliders" class="sliders"></div>
+    </details>
+    <details open>
+      <summary>Song</summary>
+      <div class="row"><span class="lbl">Beats / bar</span><select id="bpb"></select></div>
+      <div class="row"><span class="lbl">Grid</span><select id="grid"></select></div>
+      <div id="masterSliders" class="sliders"></div>
+    </details>
+  </aside>
+</main>
+
+<section class="keys" id="keys" aria-label="Keyboard: the keys that sound; click a key to play it">
+  <canvas id="keysCanvas"></canvas>
+</section>
+
+<dialog id="help">
+  <h2>Shortcuts</h2>
+  <table>
+    <tr><td>Click</td><td>Draw a note (drag to set its length) · click a note to select it</td></tr>
+    <tr><td>Drag a note</td><td>Move it · drag its right end to change its length · <kbd>Alt</kbd> turns the grid off</td></tr>
+    <tr><td><kbd>Shift</kbd> + drag</td><td>Select several notes · <kbd>Shift</kbd> + click adds one</td></tr>
+    <tr><td>Right click</td><td>Delete a note (drag to delete several)</td></tr>
+    <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Move the selected notes · <kbd>Shift</kbd> + <kbd>↑</kbd> <kbd>↓</kbd> by an octave</td></tr>
+    <tr><td><kbd>Backspace</kbd></td><td>Delete the selected notes</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd> <kbd>A</kbd></td><td>Copy · cut · paste at the cursor · select all</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Undo / redo</td></tr>
+    <tr><td><kbd>Space</kbd></td><td>Play from the cursor / stop · <kbd>Enter</kbd> plays from the top</td></tr>
+    <tr><td><kbd>L</kbd></td><td>Loop</td></tr>
+    <tr><td>Wheel</td><td>Scroll · <kbd>Shift</kbd> + wheel along the time · <kbd>Ctrl</kbd> + wheel or <kbd>+</kbd> <kbd>−</kbd> zoom</td></tr>
+  </table>
+  <p class="hint2">The <b>bar ruler</b> at the top: click sets the cursor, drag sets the loop region, double click removes it.</p>
+  <p class="hint2">The <b>velocity lane</b>: drag across the stems to set how hard the notes are struck. With notes selected, only those change.</p>
+  <p class="hint2">The <b>pedal lane</b>: drag to press the sustain pedal, right-drag (or <kbd>Shift</kbd> + drag) to lift it.</p>
+  <p class="hint2">The <b>keyboard</b> shows the keys that sound: orange for a finger (stronger for a harder blow), green for strings held by the pedal alone. Click a key to play it; lower on the key is louder.</p>
+  <p class="hint2"><b>Humanize</b> (next to the tempo) plays the notes like a person: two hands and their fingers (the fourth and fifth are weaker), a chord too wide for a hand is rolled, a line is played legato, the pedal goes down just after the keys; timing and loudness drift, a phrase moves on and eases off, the top note is brought out and comes a little early, and the song slows into its last note. The <b>Humanize</b> slider (Player panel) sets how much. Switched off, the notes are played exactly as written.</p>
+  <p class="hint2"><b>Import MIDI</b> (menu, or drop a <code>.mid</code> file on the page) takes every track but the drums, with its sustain pedal. The song has one tempo: where the file changes tempo, the notes keep their place in time. A file that was played by a person is not humanized again. <b>Export MIDI</b> writes the notes as written; <b>Export WAV</b> renders what you hear.</p>
+  <p class="hint2">Your song lives in the page address: copy it any time to share.</p>
+  <form method="dialog"><button class="btn primary">Got it</button></form>
+</dialog>
+
+<input type="file" id="midiFile" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
