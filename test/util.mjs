@@ -114,10 +114,10 @@ export function cachedBoard(fs = FS) {
   return boards.get(fs);
 }
 
-// What the two microphones hear: the engine's six channels, each through its two responses.
+// What the two microphones hear: the engine's seven channels, each through its two responses.
 // Returns { L, R } (Float64Array), as long as the rendering plus the responses.
 export function throughBoard(e, secs, board = cachedBoard(), fs = FS) {
-  const n = Math.floor((secs * fs) / 128) * 128, ch = [0, 1, 2, 3, 4, 5].map(() => new Float32Array(n));
+  const n = Math.floor((secs * fs) / 128) * 128, ch = [0, 1, 2, 3, 4, 5, 6].map(() => new Float32Array(n));
   for (let i = 0; i < n; i += 128) e.render(ch.map((c) => c.subarray(i, i + 128)), 128, i);
   const len = n + board.irs[0].length;
   let N = 1;
@@ -127,7 +127,7 @@ export function throughBoard(e, secs, board = cachedBoard(), fs = FS) {
     board.specN = N;
     board.spec = board.irs.map((h) => { const re = new Float64Array(N), im = new Float64Array(N); re.set(h); fft(re, im); return { re, im }; });
   }
-  for (let z = 0; z < 6; z++) {
+  for (let z = 0; z < 7; z++) {
     if (peak(ch[z], 0, n / fs, fs) === 0) continue;
     const xr = new Float64Array(N), xi = new Float64Array(N);
     xr.set(ch[z]); fft(xr, xi);
@@ -141,12 +141,21 @@ export function throughBoard(e, secs, board = cachedBoard(), fs = FS) {
   }
   return { L: out[0], R: out[1] };
 }
-// one note as the microphones hear it, the two mixed to one
-export function heardNote(m, v = 0.5, secs = 2.5, hold = 0) {
+// one note as the two microphones hear it: { L, R }
+export function heardStereo(m, v = 0.5, secs = 2.5, hold = 0) {
   const e = engine();
   e.post({ type: 'n', t: 0.01, m, v });
   if (hold) e.post({ type: 'o', t: 0.01 + hold, m });
-  const { L, R } = throughBoard(e, secs), out = new Float32Array(L.length);
+  const { L, R } = throughBoard(e, secs);
+  return { L: Float32Array.from(L), R: Float32Array.from(R) };
+}
+// A level (dB) measured on each microphone and averaged as power. (The two hear a note with
+// different delays: added to one signal they add up or cancel by chance. Two ears, or two
+// speakers in a room, do not add them that way.)
+export const both = (st, level) => 10 * Math.log10((Math.pow(10, level(st.L) / 10) + Math.pow(10, level(st.R) / 10)) / 2);
+// the two mixed to one
+export function heardNote(m, v = 0.5, secs = 2.5, hold = 0) {
+  const { L, R } = heardStereo(m, v, secs, hold), out = new Float32Array(L.length);
   for (let i = 0; i < out.length; i++) out[i] = 0.5 * (L[i] + R[i]);
   return out;
 }

@@ -44,3 +44,30 @@ test('the strings stop ringing along when the pedal comes up', () => {
   const extra = diff(on, off), drop = db(rms(extra, 1, 1.4)) - db(rms(extra, 2.2, 2.6));
   assert.ok(drop > 30, `0.7 s after the pedal came up: ${drop.toFixed(1)} dB down`);
 });
+
+// ---- the noises of the action ---------------------------------------------------------
+import { knockLevel, vFor } from '../tools/notes.mjs';
+import { heardStereo } from './util.mjs';
+
+test('key and hammer knock at the start of a note, as on the recorded piano', () => {
+  // Recorded (a Steinway B, University of Iowa; 2026-11-10): the knock against the note, dB:
+  // C6 -13.7 at mf and -15.9 at ff, C7 -6.4 and -14.9, C8 +2.3 and +2.1. Without the knock the
+  // model had -25 to -44.
+  for (const [m, mf, ff] of [[84, -13.7, -15.9], [96, -6.4, -14.9], [108, 2.3, 2.1]]) {
+    const a = knockLevel(heardStereo(m, vFor(1.5), 1).L, m), b = knockLevel(heardStereo(m, vFor(4), 1).L, m);
+    assert.ok(Math.abs(a - mf) < 7, `key ${m} at mf: ${a.toFixed(1)} dB, recorded ${mf}`);
+    assert.ok(Math.abs(b - ff) < 7, `key ${m} at ff: ${b.toFixed(1)} dB, recorded ${ff}`);
+  }
+});
+
+test('with the noises switched off there is no knock; the pedal makes a soft thump of its own', () => {
+  const quiet = (() => { const e = engine({ noise: 0 }); e.post({ type: 'n', t: 0.01, m: 96, v: 0.5 }); return render(e, 0.5); })();
+  const loud = (() => { const e = engine({ noise: 1 }); e.post({ type: 'n', t: 0.01, m: 96, v: 0.5 }); return render(e, 0.5); })();
+  assert.ok(knockLevel(loud, 96) - knockLevel(quiet, 96) > 10, `knock ${knockLevel(loud, 96).toFixed(1)} dB with, ${knockLevel(quiet, 96).toFixed(1)} dB without`);
+  // the pedal alone, no note: something is heard, far under a note
+  const e = engine(); e.post({ type: 'p', t: 0.05, v: 1 }); e.post({ type: 'p', t: 0.6, v: 0 });
+  const x = render(e, 1.2), n = (() => { const e2 = engine(); e2.post({ type: 'n', t: 0.05, m: 60, v: 0.5 }); return render(e2, 1.2); })();
+  const ratio = db(rms(x, 0.05, 0.3)) - db(rms(n, 0.05, 0.3));
+  assert.ok(ratio > -50 && ratio < -15, `pedal down: ${ratio.toFixed(1)} dB against a medium C4`);
+  assert.ok(rms(x, 0.6, 0.9) > 0, 'pedal up is heard too');
+});

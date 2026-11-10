@@ -11,7 +11,7 @@
 import { fileURLToPath } from 'node:url';
 import { decode } from './ltas.mjs';
 import { inharmonicity, hammerSpeed } from '../js/worklet.js';
-import { FS, spectrum, freqNear, rms, note, heardNote } from '../test/util.mjs';
+import { FS, fft, spectrum, freqNear, rms, note, heardStereo } from '../test/util.mjs';
 import { ltas, BANDS } from './ltas.mjs';
 
 // key velocity (0..1) for a hammer speed in m/s
@@ -98,6 +98,21 @@ export function spectrumGap(pairs, range = 45) {
   });
 }
 
+// The knock of key and hammer at the start of a high note: the level (dB) of 100 to 600 Hz in
+// the 85 ms around the start, against the note itself (0.6 to 3 times its pitch) in the same time.
+export function knockLevel(x, m) {
+  // the start to 10 ms: the first 10 ms that reach a quarter of the loudest
+  const hop = 480, env = [];
+  for (let s = 0; s + hop <= x.length; s += hop) env.push(rms(x, s / FS, (s + hop) / FS));
+  const t0 = (env.findIndex((e) => e > 0.25 * Math.max(...env)) * hop) / FS;
+  const f0 = 440 * Math.pow(2, (m - 69) / 12), st = Math.max(0, Math.floor((t0 - 0.02) * FS)), n = 4096, N = 8192;
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let i = 0; i < n; i++) re[i] = (x[st + i] || 0) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n));
+  fft(re, im);
+  const band = (lo, hi) => { let e = 0; for (let i = Math.floor((lo * N) / FS); i < (hi * N) / FS; i++) e += re[i] * re[i] + im[i] * im[i]; return 10 * Math.log10(e + 1e-30); };
+  return band(100, 600) - band(0.6 * f0, 3 * f0);
+}
+
 // the same note from the model, struck at `speed` m/s
 export const modelNote = (m, speed) => facts(note(m, vFor(speed), m >= 84 ? 4 : 10), m, false);
 // From a softer note (facts) to a harder one: the level gain (dB), and how much more than the
@@ -135,7 +150,7 @@ for (const { o, m } of rows) {
 // the spectrum as heard: the model through its soundboard against the recorded notes
 {
   const pairs = [];
-  for (const { o, m } of rows) for (const d of ['mf', 'ff']) pairs.push([noteSpectrum(decode(`${DIR}Piano.${d}.C${o}.aiff`)), noteSpectrum(heardNote(m, vFor(SPEED[d]), 2.5))]);
+  for (const { o, m } of rows) for (const d of ['mf', 'ff']) { const st = heardStereo(m, vFor(SPEED[d]), 2.5), a = noteSpectrum(st.L), b = noteSpectrum(st.R); pairs.push([noteSpectrum(decode(`${DIR}Piano.${d}.C${o}.aiff`)), a.map((x, i) => 0.5 * (x + b[i]))]); }
   console.log('\nSPECTRUM as heard, model - recorded, mean over the 16 mf and ff notes (dB; each note against its own total)');
   console.log('   band    model - recorded   notes');
   for (const g of spectrumGap(pairs)) if (g.n >= 3) console.log(`${g.f >= 1000 ? (g.f / 1000).toFixed(1) + ' k' : g.f.toFixed(0)}`.padStart(7) + `      ${f(g.diff)}          ${g.n}`);

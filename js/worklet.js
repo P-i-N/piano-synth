@@ -183,10 +183,11 @@ const PIANO = {
   b3: 2.9e-7,
   flat: 4000,
   // LEVEL TRIM, dB by key. Not physics: matched to the recorded loud notes (the C of each
-  // octave, a Steinway B). Heard through the soundboard, the model's C6 and C7 are 11 and 13 dB
-  // louder against C4 than recorded; the felt does not explain it (tried from 15 to 375 N).
+  // octave, a Steinway B). Heard through the soundboard, the model's notes from C6 up are about
+  // 10 dB louder against C4 than recorded (the felt does not explain it: tried from 15 to
+  // 375 N), and its bass notes 3 to 5 dB louder.
   // Only what the engine reports is trimmed, not the strings.
-  trim: [[21, 0], [60, 0], [72, -2], [84, -11], [96, -13], [108, -2]],
+  trim: [[21, -3], [36, -5], [48, -3], [60, 0], [72, -1], [84, -10], [96, -10.5], [108, -14]],
   // a damper on the strings: loss rate, 1/s
   damper: [[21, 12], [60, 35], [89, 60]],
   // The strings of a note are up to this many cents from its pitch (Kirk 1959: one to two
@@ -198,6 +199,13 @@ const PIANO = {
   // The strings that ring along (see Sympathy below): the keys up to this one stand for all
   // damped strings; the keys above lastDamper ring along always.
   sympathyBass: 44,
+  // THE NOISES OF THE ACTION, as forces on the bridge (N), not modelled parts. The knock of key
+  // and hammer when a note is struck is a push and pull of `knockMs` milliseconds: `knock` newtons at
+  // a hammer speed of 1 m/s, growing with speed to the power `knockGrow`. Matched to the knock
+  // in recorded high notes (C6 to C8, soft to loud).
+  // A key coming up and the pedal going down or up are softer pushes; the dampers leaving
+  // the strings make them whisper for a moment. Those three are estimates.
+  knock: 2.1, knockGrow: 1.1, knockMs: 6, keyUp: 0.3, pedalThump: 0.9, damperHiss: 0.3,
   uneven: 0.06,       // and the hammer does not strike them equally hard
 };
 const REF = 5e-4;     // the compression (m) at which feltF is given
@@ -503,11 +511,12 @@ class PianoEngine {
     for (let m = LO; m <= HI; m++) this.voices[m] = new Voice(m, fs);
     this.live = [];
     this.pedal = false;
-    this.P = { hard: 0 };
-    this.acc = [0, 1, 2, 3, 4, 5].map(() => new Float64Array(128));
+    this.P = { hard: 0, noise: 1 };
+    this.thumps = []; this.hiss = 0; this.rnd = mulberry32(0x5eed);
+    this.acc = [0, 1, 2, 3, 4, 5, 6].map(() => new Float64Array(128));
     this.bus = new Float64Array(128);
     this.sympathy = new Sympathy(fs);
-    this.dcx = new Float64Array(6); this.dcy = new Float64Array(6);
+    this.dcx = new Float64Array(7); this.dcy = new Float64Array(7);
     this.dcR = 1 - (TAU * 12) / fs;
     this.outGain = 0.0054;
   }
@@ -515,6 +524,7 @@ class PianoEngine {
   // c: { hard: felt hardness -1 .. 1 }
   configure(c) {
     if (c.hard != null) this.P.hard = clamp(c.hard, -1, 1);
+    if (c.noise != null) this.P.noise = clamp(c.noise, 0, 1);
   }
 
   // events: n key down { m, v }, o key up { m }, p sustain pedal { v: 0 | 1 },
@@ -529,6 +539,12 @@ class PianoEngine {
   }
 
   flush() { this.queue.length = 0; this.qh = 0; }
+
+  // a push of `amp` newtons lasting `ms`: a knock of the action
+  thump(v, amp, ms) {
+    if (!v || !(this.P.noise > 0) || this.thumps.length > 64) return;
+    this.thumps.push({ amp: amp * this.P.noise, i: 0, n: Math.max(8, Math.round((ms * this.fs) / 1000)) });
+  }
 
   wake(v) {
     if (v.active) return;
@@ -552,13 +568,20 @@ class PianoEngine {
         if (!v) break;
         this.wake(v);
         v.strike(ev.v, this.P.hard);
+        this.thump(v, PIANO.knock * Math.pow(hammerSpeed(ev.v), PIANO.knockGrow), PIANO.knockMs);
         break;
       case 'o':
         if (!v) break;
+        if (v.keyDown) this.thump(v, PIANO.keyUp, PIANO.knockMs);
         v.keyDown = false;
         if (!this.pedal && !v.dropped) v.damp();
         break;
       case 'p':
+        if (this.pedal !== ev.v > 0) {
+          // the pedal's own thump, low on the bridge; going down, the dampers leave the strings
+          this.thump(this.voices[LO + 6], PIANO.pedalThump, 3 * PIANO.knockMs);
+          if (ev.v > 0) this.hiss = Math.round(0.04 * this.fs);
+        }
         this.pedal = ev.v > 0;
         for (const x of this.live) if (!x.keyDown && !x.dropped) { if (this.pedal) x.lift(); else x.damp(); }
         break;
@@ -575,13 +598,14 @@ class PianoEngine {
     }
   }
 
-  // Output: six channels, the force on the bridge at six places along it, bass to treble
-  // (a key lies between two of them and gives each its share). A single Float32Array instead gets their sum.
+  // Output: seven channels. Six are the force on the bridge at six places along it, bass to
+  // treble (a key lies between two of them and gives each its share); the seventh is the
+  // knocks of the action. A single Float32Array instead gets their sum.
   render(out, n, frame0) {
     const q = this.queue, live = this.live, acc = this.acc;
     const multi = Array.isArray(out);
-    if (acc[0].length < n) for (let c = 0; c < 6; c++) acc[c] = new Float64Array(n);
-    for (let c = 0; c < 6; c++) acc[c].fill(0, 0, n);
+    if (acc[0].length < n) for (let c = 0; c < 7; c++) acc[c] = new Float64Array(n);
+    for (let c = 0; c < 7; c++) acc[c].fill(0, 0, n);
     for (const v of live) v.peak = 0;
     let i = 0;
     while (i < n) {
@@ -598,7 +622,20 @@ class PianoEngine {
       const bus = this.bus;
       let pk = 0;
       for (let j = 0; j < n; j++) { const x = acc[0][j] + acc[1][j] + acc[2][j] + acc[3][j] + acc[4][j] + acc[5][j]; bus[j] = x; if (x > pk) pk = x; else if (-x > pk) pk = -x; }
+      // dampers leaving the strings: a whisper into the strings that ring along
+      if (this.hiss > 0) {
+        const a = PIANO.damperHiss * this.P.noise;
+        for (let j = 0; j < n && this.hiss > 0; j++, this.hiss--) bus[j] += a * (2 * this.rnd() - 1);
+        if (a > pk) pk = a;
+      }
       this.sympathy.run(bus, acc, n, this.pedal, pk);
+      // the knocks of the action
+      for (let k = this.thumps.length - 1; k >= 0; k--) {
+        const t = this.thumps[k], to = acc[6];
+        for (let j = Math.max(0, -t.i); j < n && t.i + j < t.n; j++) { const x = (TAU * (t.i + j)) / t.n; to[j] += t.amp * Math.sin(x) * (0.5 - 0.5 * Math.cos(x)); }
+        t.i += n;
+        if (t.i >= t.n) this.thumps.splice(k, 1);
+      }
     }
     // notes that have died away give their place back
     for (let k = live.length - 1; k >= 0; k--) {
@@ -610,7 +647,7 @@ class PianoEngine {
     }
     const dx = this.dcx, dy = this.dcy, R = this.dcR, g = this.outGain;
     if (!multi) out.fill(0, 0, n);
-    for (let c = 0; c < 6; c++) {
+    for (let c = 0; c < 7; c++) {
       const a = acc[c], o = multi ? out[c] : out;
       let x1 = dx[c], y1 = dy[c];
       for (let j = 0; j < n; j++) {
@@ -642,7 +679,7 @@ if (typeof registerProcessor === 'function') {
     }
     process(inputs, outputs) {
       const ch = outputs[0];
-      if (ch.length >= 6) this.engine.render(ch, ch[0].length, currentFrame);
+      if (ch.length >= 7) this.engine.render(ch, ch[0].length, currentFrame);
       else this.engine.render(ch[0], ch[0].length, currentFrame);
       return true;
     }

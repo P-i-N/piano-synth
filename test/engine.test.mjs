@@ -219,14 +219,14 @@ test('no more notes ring at once than the engine can carry', () => {
   for (let i = 0; i < x.length; i += 97) assert.ok(Number.isFinite(x[i]));
 });
 
-test('the engine renders six channels that add up to the single one', () => {
+test('the engine renders seven channels (six places on the bridge, and the knocks) that add up to the single one', () => {
   const post = (e) => { for (const [m, t] of [[30, 0.01], [50, 0.05], [64, 0.1], [80, 0.15], [100, 0.2]]) e.post({ type: 'n', t, m, v: 0.7 }); };
   const a = engine(), b = engine();
   post(a); post(b);
-  const mono = render(a, 0.5), n = mono.length, ch = [0, 1, 2, 3, 4, 5].map(() => new Float32Array(n));
+  const mono = render(a, 0.5), n = mono.length, ch = [0, 1, 2, 3, 4, 5, 6].map(() => new Float32Array(n));
   for (let i = 0; i < n; i += 128) b.render(ch.map((c) => c.subarray(i, i + 128)), 128, i);
   let err = 0, used = 0;
-  for (let c = 0; c < 6; c++) if (peak(ch[c]) > 1e-4) used++;
+  for (let c = 0; c < 7; c++) if (peak(ch[c]) > 1e-4) used++;
   for (let i = 0; i < n; i++) err = Math.max(err, Math.abs(mono[i] - ch.reduce((s, c) => s + c[i], 0)));
   assert.ok(err < 1e-5, `difference ${err}`);
   assert.ok(used >= 5, `${used} channels carry sound`);

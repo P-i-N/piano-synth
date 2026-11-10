@@ -316,6 +316,7 @@ function fxChanged(slow) {
 function buildSettings() {
   const inst = (k) => [() => song.inst[k], (v) => { song.inst[k] = v; audio.syncInstrument(); }];
   mkSlider($('instSliders'), ...inst('hard'), 'Hammer felt', -1, 1, 0.02, signed).title = 'Softer or harder hammer felt: a harder felt gives a brighter note';
+  mkSlider($('instSliders'), ...inst('noise'), 'Action noise', 0, 1, 0.01, pct).title = 'The knock of key and hammer, keys coming up, the pedal';
 
   humanRow = mkSlider($('playerSliders'), () => song.inst.human, (v) => { song.inst.human = v; if (player.playing) player.list = performance_(); }, 'Humanize', 0, 1, 0.01, pct);
   $('humanOn').addEventListener('change', (e) => {

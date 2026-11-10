@@ -16,10 +16,10 @@ export const isBlack = (m) => [1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12);
 // Snap grids: steps to a quarter note.
 export const GRIDS = [[1, '1/4'], [2, '1/8'], [3, '1/8 triplets'], [4, '1/16'], [6, '1/16 triplets'], [8, '1/32']];
 
-export const INSTRUMENT = { hard: 0, human: 1, humanOn: 1 };
+export const INSTRUMENT = { hard: 0, human: 1, humanOn: 1, noise: 1 };
 // Order of the settings in a link. New settings go at the end; a retired setting keeps its
 // place (null), so old links still load.
-const INST_KEYS = ['hard', 'human', 'humanOn'];
+const INST_KEYS = ['hard', 'human', 'humanOn', 'noise'];
 // How much of the player's feel is played: `human` is the amount, `humanOn` (1 or 0) the
 // switch next to the tempo. Switched off, the song is played exactly as written.
 export const humanOf = (inst) => (inst.humanOn === 0 ? 0 : inst.human);

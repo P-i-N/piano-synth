@@ -5,16 +5,18 @@ import { makeReverbIR } from './ir.js';
 import { DELAY_TIMES, eventsBetween, songEnd, tickSecs } from './song.js';
 import { MODEL_VERSION } from './board/model.js';
 
-const WORKLET_URL = new URL('./worklet.js', import.meta.url).href;
+// (the version in the address makes a browser fetch the engine again when the model changes:
+// an old engine with a new page would send six channels where seven are expected)
+const WORKLET_URL = new URL(`./worklet.js?v=${MODEL_VERSION}`, import.meta.url).href;
 const irCache = new Map();
 // level of the instrument on the bus
 export const LEVEL = 1.5;
 // The soundboard's responses peak at 1; this brings a medium note through them to the
-// A-weighted loudness it had without them (measured: 13.8 dB less, mean of C2 to C6).
-export const BOARD_LEVEL = 0.204;
+// A-weighted loudness it had without them (measured: 13.1 dB less, mean of C2 to C6).
+export const BOARD_LEVEL = 0.221;
 // Until the soundboard is built (about a second, the first time): the force on the bridge
 // as it is, each of the six places only set between the speakers, bass left.
-export const DIRECT = { pan: [-0.5, -0.3, -0.1, 0.1, 0.3, 0.5] };
+export const DIRECT = { pan: [-0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0] };
 
 // ---- the soundboard: built once in a worker, kept in IndexedDB ---------------------
 
@@ -23,7 +25,7 @@ export const cacheKey = (fs) => `board:${MODEL_VERSION}:${fs}`;
 // is this (possibly cached) record a usable soundboard for this sample rate?
 export function validBoard(rec, fs) {
   if (!rec || typeof rec !== 'object' || rec.version !== MODEL_VERSION || rec.fs !== fs) return false;
-  if (!Array.isArray(rec.irs) || rec.irs.length !== 12) return false;
+  if (!Array.isArray(rec.irs) || rec.irs.length !== 14) return false;
   const len = rec.irs[0] && rec.irs[0].length;
   if (!len) return false;
   for (const h of rec.irs) {
@@ -93,20 +95,21 @@ function reverbBuffer(ctx, size, tone) {
   return toBuffer(ctx, irCache.get(key));
 }
 
-const engineCfg = (inst) => ({ type: 'cfg', hard: inst.hard });
+const engineCfg = (inst) => ({ type: 'cfg', hard: inst.hard, noise: inst.noise });
 
 class Graph {
   constructor(ctx, node) {
     const c = ctx;
     this.ctx = c; this.node = node;
     const gain = (v) => { const g = c.createGain(); g.gain.value = v; return g; };
-    // The engine sends six channels: the force on the bridge at six places, bass to treble.
-    // Each goes through the soundboard's response for its place (two microphones).
-    const split = c.createChannelSplitter(6);
+    // The engine sends seven channels: the force on the bridge at six places, bass to treble,
+    // and the knocks of the action. Each goes through its response of the soundboard (two
+    // microphones).
+    const split = c.createChannelSplitter(7);
     node.connect(split);
     this.direct = gain(1); this.board = gain(0);
     this.zones = [];
-    for (let z = 0; z < 6; z++) {
+    for (let z = 0; z < 7; z++) {
       const pan = c.createStereoPanner(); pan.pan.value = DIRECT.pan[z];
       split.connect(pan, z); pan.connect(this.direct);
       const conv = c.createConvolver(); conv.normalize = false;
@@ -165,7 +168,7 @@ class Graph {
 
   // the soundboard is heard from now on, in place of the bare force on the bridge
   loadBoard(board, now) {
-    for (let z = 0; z < 6; z++) this.zones[z].buffer = toBuffer(this.ctx, { L: board.irs[2 * z], R: board.irs[2 * z + 1] });
+    for (let z = 0; z < 7; z++) this.zones[z].buffer = toBuffer(this.ctx, { L: board.irs[2 * z], R: board.irs[2 * z + 1] });
     const t = this.ctx.currentTime;
     if (now) { this.board.gain.setTargetAtTime(BOARD_LEVEL, t, 0.03); this.direct.gain.setTargetAtTime(0, t, 0.03); }
     else { this.board.gain.setValueAtTime(BOARD_LEVEL, 0); this.direct.gain.setValueAtTime(0, 0); }
@@ -209,7 +212,7 @@ export class AudioEngine {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         this.ctx = new Ctx({ latencyHint: 'interactive' });
         await this.ctx.audioWorklet.addModule(WORKLET_URL);
-        const node = new AudioWorkletNode(this.ctx, 'piano-strings', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [6] });
+        const node = new AudioWorkletNode(this.ctx, 'piano-strings', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [7] });
         this.graph = new Graph(this.ctx, node);
         if (this.song) { this.graph.setInstrument(this.song.inst); this.graph.setFx(this.song.fx, this.song.bpm, false); }
         this.boardReady = getBoard(this.ctx.sampleRate).then((b) => this.graph.loadBoard(b, true), (err) => {
@@ -265,7 +268,7 @@ export async function renderSong(song, list, sampleRate = 48000) {
   // at the end every key and the pedal come up
   events.push({ type: 'O', t: dur - tail + 0.5 });
   const node = new AudioWorkletNode(ctx, 'piano-strings', {
-    numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [6],
+    numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [7],
     processorOptions: { cfg: engineCfg(song.inst), events },
   });
   const graph = new Graph(ctx, node);

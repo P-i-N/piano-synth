@@ -14,7 +14,7 @@
 //
 // Building takes a few seconds; it is done once, in a worker, and kept (see js/audio.js).
 
-export const MODEL_VERSION = 1;
+export const MODEL_VERSION = 5;
 
 // Lengths in metres. x runs along the keyboard from the bass side, y from the keyboard to
 // the tail, z up. Sources: Ege, Boutillon and Rebillat (2013) and Boutillon and Ege (2013) for
@@ -36,29 +36,38 @@ export const BOARD = {
   // makes it. In a piano a string tuned to a board resonance is drained by it within a
   // moment. Here the strings do not feel the board, and a sharp resonance makes the note
   // on it louder than its neighbours for as long as it rings (by up to 8 dB at 3 Hz).
+  // (This is for the size of the response. How long the board rings is not shortened by it.)
   width: 20,
   top: 10000,                   // Hz: resonances above are not computed
   // where the force of each of the engine's six ranges of keys meets the board: the bass
   // bridge, then along the long bridge to the top
   bridge: [[0.55, 1.2], [0.3, 1.05], [0.5, 0.85], [0.75, 0.62], [1.0, 0.42], [1.2, 0.28]],
-  // two microphones inside the open piano, above the strings, towards the bass and the treble
-  mics: [[0.4, 0.55, 0.45], [1.0, 0.55, 0.45]],
+  // Two microphones at the open side of the piano, 0.7 m from its edge and a metre above the
+  // board, 0.9 m apart: the left one towards the tail, where the bass strings end, the right
+  // one towards the keyboard. (Close above the strings, 0.45 m from the board, neighbouring
+  // parts of the board reach the two with opposite sign: the lows then cancel in the sum.)
+  mics: [[2.1, 1.25, 1.0], [2.1, 0.35, 1.0]],
   // the lid: hinged along the bass side at this height above the board, open by this angle;
   // it throws back this share of the sound
   lid: { height: 0.3, angle: 35, reflect: 0.9 },
   seconds: 1.2,                 // length of the responses
+  same: [150, 800],             // Hz: below, both microphones hear the same; above, each its own delays
 };
 const RHO = 1.2, C = 343;       // air: kg/m³, m/s
 
-// THE MICROPHONE CHAIN. Not computed: a response [Hz, dB] matched to recordings, on top of
+// THE MICROPHONE CHAIN. Not computed: a response [Hz, dB] matched to a recording, on top of
 // what the board model gives the microphones. It stands for everything between the strings
-// and the recording that the model leaves out or gets wrong.
-// Matched to the eight loud recorded notes of a Steinway B (University of Iowa; third-octave
-// spectra of their first two seconds, `node tools/notes.mjs`). Without it the model has 7 to
-// 23 dB too much below 200 Hz and 13 to 26 dB too much above 3 kHz, against 250 Hz to 2.5 kHz.
-// The lows: a board in the open radiates little below 100 Hz (the air goes round its edge),
-// which the model does not know. The highs: not explained.
-export const CHAIN = [[40, -24], [63, -25], [80, -15], [125, -16], [160, -13], [220, -7], [300, -6], [400, -5], [500, 0], [800, 4], [1250, 3], [2000, 1], [2500, -3], [3200, -19], [4000, -19], [5000, -17], [6300, -27], [8000, -31], [10000, -33]];
+// and a finished recording that the model leaves out or gets wrong.
+// Matched to the long-term third-octave spectrum of a studio recording of a grand (Bach,
+// Goldberg Variations, variation 22, Kimiko Ishizaka, CC0): the mean of six demos against it,
+// `node tools/song.mjs` and test/tone.test.mjs. With it the demos are within 5 dB of the
+// recording from 80 Hz to 10 kHz.
+// (A first chain was matched to single recorded notes of another piano, close microphones.
+// It left the demos 11 to 16 dB thin at 125 to 160 Hz, 5 to 7 dB too strong from 1 to 2.5 kHz
+// and without anything above 10 kHz: heard as muffled and cheap.)
+// Most of it is the cut above 2 kHz: the model's strings push on the bridge with far more
+// highs than a recorded piano has. Why is not known.
+export const CHAIN = [[50, -10], [100, -9], [125, -4], [160, -6], [250, -2], [400, -1], [500, -4], [630, -3], [800, 0], [1000, 0], [1250, -2], [1600, -3], [2000, -6], [2500, -11], [3200, -15], [4000, -14], [5000, -14], [6300, -19], [8000, -20], [10000, -20], [16000, -22]];
 export function chainGain(f, tab = CHAIN) {
   if (!tab.length) return 0;
   if (f <= tab[0][0]) return tab[0][1];
@@ -137,8 +146,8 @@ function fft(re, im) {
   }
 }
 
-// The response (N samples) that has the size mag[0 .. N/2] at every frequency and no delay
-// it does not need: every resonance rings from the first sample on.
+// The phase (for each of N frequencies) of the response that has the size mag[0 .. N/2] and
+// no delay it does not need: every resonance rings from the first sample on.
 function minimumPhase(mag, N) {
   const re = new Float64Array(N), im = new Float64Array(N);
   let top = 0;
@@ -149,64 +158,145 @@ function minimumPhase(mag, N) {
   // keep the part of the log spectrum that belongs to a causal response
   for (let i = 0; i < N; i++) { re[i] = (re[i] / N) * (i === 0 || i === N / 2 ? 1 : i < N / 2 ? 2 : 0); im[i] = 0; }
   fft(re, im);
-  for (let i = 0; i < N; i++) { const g = Math.exp(re[i]), ph = im[i]; re[i] = g * Math.cos(ph); im[i] = -g * Math.sin(ph); }
-  fft(re, im);
-  for (let i = 0; i < N; i++) re[i] /= N;
-  return re;
+  return im;
 }
 
-// The board: { version, fs, modes, irs: 12 Float32Arrays }, the response of the left and of
-// the right microphone to a force on each of the six places on the bridge (irs[2 z], irs[2 z + 1]).
+// The board: { version, fs, modes, irs: 14 Float32Arrays }, the response of the left and of
+// the right microphone to a force on each of the six places on the bridge (irs[2 z],
+// irs[2 z + 1]), and to a knock of the action (irs[12], irs[13]).
 //
-// For every frequency the energies of the resonances are added: what a microphone hears on
-// average. Added with their true delays, the resonances add up or cancel at the microphone
-// by chance, differently for every pitch: neighbouring keys then differ in loudness by
-// 4.5 dB on average and up to 23 dB, which no piano does. (In a real piano the strings feel
-// the board, which evens this out; here they do not.)
+// The size of a response at every frequency is the energy sum of the resonances: what a
+// microphone hears on average. Added with their true delays, the resonances add up or cancel
+// at the microphone by chance, differently for every pitch: neighbouring keys then differ in
+// loudness by 4.5 dB on average and up to 23 dB, which no piano does. (In a real piano the
+// strings feel the board, which evens this out; here they do not.)
+// The delays are true ones all the same: for each microphone the sum with true delays is
+// made as well (for the middle of the bridge), and what it has more than the shortest
+// response of its own size (its delays, and with them what differs between the two
+// microphones) is kept. Without that both microphones would hear nearly the same, and the
+// piano would be a point between the speakers. All six places on the bridge get the same
+// delays: a key lies between two places, and with different delays the two would cancel
+// at some pitches.
 export function buildBoard(fs, P = BOARD) {
-  const modes = plateModes(P, Math.min(P.top, 0.45 * fs));
+  const top = Math.min(P.top, 0.45 * fs), modes = plateModes(P, top);
   const points = [...P.mics, ...P.mics.map((p) => mirrored(p, P.lid))], modal = (P.mass * P.a * P.b) / 4;
   // frequencies at which the energy is summed: close enough for the narrowest resonance
   const grid = [];
   for (let f = 20; f < 0.5 * fs; f += Math.max(0.5, 0.004 * f)) grid.push(f);
-  const power = [];
+  const power = [], coherent = [];
+  let N = 1;
+  while (N < 2.5 * fs) N <<= 1;
+  for (let i = 0; i < 2; i++) coherent.push(new Float64Array(N));
   for (let i = 0; i < 12; i++) power.push(new Float64Array(grid.length));
   const zero = points.map(() => 0);
   let g0 = 0;
   for (const mode of modes) {
     const w = 2 * Math.PI * mode.f, half = 0.5 * Math.max(P.loss, P.width / mode.f) * mode.f;   // half width, Hz
+    // for the delays each resonance rings as long as its loss lets it, not widened
+    const sigma = Math.PI * P.loss * mode.f, ring = Math.min(N, Math.ceil((9.2 / sigma) * fs));   // until it is 80 dB down
+    const g = Math.exp(-sigma / fs), cr = g * Math.cos(w / fs), ci = g * Math.sin(w / fs);
     const R = radiation(mode, points, zero, P);
     while (g0 < grid.length && grid[g0] < mode.f - 100 * half) g0++;
     for (let z = 0; z < 6; z++) {
       const [bx, by] = P.bridge[z], drive = Math.sin((mode.m * Math.PI * bx) / P.a) * Math.sin((mode.n * Math.PI * by) / P.b);
       // pressure for a force of 1 N: rho / 2 pi x the acceleration of the resonance, summed over the board
       const amp = ((RHO / (2 * Math.PI)) * drive * w) / modal;
+      // time runs from when the sound of this place on the bridge reaches the nearer microphone
+      const near = Math.min(Math.hypot(P.mics[0][0] - bx, P.mics[0][1] - by, P.mics[0][2]), Math.hypot(P.mics[1][0] - bx, P.mics[1][1] - by, P.mics[1][2]));
+      const turn = (w / C) * near, tc = Math.cos(turn), ts = Math.sin(turn);
       for (let q = 0; q < 2; q++) {
         // the microphone, and the lid's copy of it
         const a2 = amp * amp * (R[q][0] ** 2 + R[q][1] ** 2 + P.lid.reflect ** 2 * (R[q + 2][0] ** 2 + R[q + 2][1] ** 2)), out = power[2 * z + q];
         for (let i = g0; i < grid.length && grid[i] < mode.f + 100 * half; i++) { const d = (grid[i] - mode.f) / half; out[i] += a2 / (1 + d * d) / (half * half); }
+        // the same resonance with its true delays: amp x e^(-sigma t) x Re((re + j im) x j e^(j w t))
+        if (z !== 2 || drive * drive < 1e-8) continue;
+        const sr = R[q][0] + P.lid.reflect * R[q + 2][0], si = R[q][1] + P.lid.reflect * R[q + 2][1];
+        const re = sr * tc - si * ts, im = sr * ts + si * tc, coh = coherent[q];
+        let ur = -im * amp, ui = re * amp;
+        for (let t = 0; t < ring; t++) { coh[t] += ur; const v = ur * cr - ui * ci; ui = ur * ci + ui * cr; ur = v; }
       }
     }
   }
-  let N = 1;
-  while (N < 2.5 * fs) N <<= 1;
   const len = Math.floor(P.seconds * fs), fade = Math.floor(0.05 * fs), irs = [];
   let peak = 0;
+  // Above 200 Hz the energy is averaged over a semitone: a resonance narrower than the step
+  // from one key to the next makes one key louder than its neighbours (by up to 9 dB).
+  const from = grid.findIndex((f) => f > 200), span = Math.round(Math.log(Math.pow(2, 1 / 24)) / Math.log(1.004));
+  for (const pw of power) {
+    const raw = Float64Array.from(pw);
+    for (let i = from; i < grid.length; i++) {
+      let sum = 0, cnt = 0;
+      for (let k = Math.max(from, i - span); k <= Math.min(grid.length - 1, i + span); k++) { sum += raw[k]; cnt++; }
+      pw[i] = sum / cnt;
+    }
+  }
   for (const pw of power) {
     const mag = new Float64Array(N / 2 + 1);
+    // above the computed resonances the board goes on as it is on average just below them
+    let above = 0, cnt = 0;
+    for (let i = 0; i < grid.length; i++) if (grid[i] > 0.6 * top && grid[i] < 0.9 * top) { above += pw[i]; cnt++; }
+    above /= cnt;
     let k = 0;
     for (let i = 1; i <= N / 2; i++) {
       const f = (i * fs) / N;
       if (f < grid[0] || f > grid[grid.length - 1]) continue;
       while (k + 2 < grid.length && grid[k + 1] < f) k++;
       const t = (f - grid[k]) / (grid[k + 1] - grid[k]);
-      mag[i] = Math.sqrt(pw[k] + t * (pw[k + 1] - pw[k])) * Math.pow(10, chainGain(f) / 20);
+      mag[i] = Math.sqrt(f > 0.9 * top ? above : pw[k] + t * (pw[k + 1] - pw[k])) * Math.pow(10, chainGain(f) / 20);
     }
-    const h = minimumPhase(mag, N).subarray(0, len);
+    // the size from the energy sum; the delays from the sum with true delays
+    const cr = Float64Array.from(coherent[irs.length % 2]), ci = new Float64Array(N);
+    fft(cr, ci);
+    const size = new Float64Array(N / 2 + 1);
+    for (let i = 0; i <= N / 2; i++) size[i] = Math.hypot(cr[i], ci[i]);
+    const short = minimumPhase(mag, N), shortOwn = minimumPhase(size, N), re = new Float64Array(N), im = new Float64Array(N);
+    let was = 0, turns = 0;
+    for (let i = 0; i <= N / 2; i++) {
+      // the extra delay, followed from one frequency to the next so that it can be scaled
+      const raw = Math.atan2(ci[i], cr[i]) - shortOwn[i];
+      turns += Math.round((was - raw) / (2 * Math.PI)); was = raw;
+      // In the lows both microphones get the shortest response, and so the same: the board's
+      // parts that move against each other reach them with opposite sign, and the bass would
+      // cancel when the channels are added. (A recorded piano's lows are the same in both.)
+      // (and above the computed resonances, where there are no delays to take)
+      const f = (i * fs) / N, u = Math.min(1, Math.max(0, (f - P.same[0]) / (P.same[1] - P.same[0])), Math.max(0, (0.9 * top - f) / (0.1 * top)));
+      const ph = short[i] + u * u * (3 - 2 * u) * (raw + 2 * Math.PI * turns);
+      re[i] = mag[i] * Math.cos(ph); im[i] = -mag[i] * Math.sin(ph);
+      if (i > 0 && i < N / 2) { re[N - i] = re[i]; im[N - i] = -im[i]; }
+    }
+    fft(re, im);
+    const h = new Float64Array(len);
+    for (let i = 0; i < len; i++) h[i] = re[i] / N;
     for (let i = 0; i < fade; i++) h[len - 1 - i] *= i / fade;
     for (let i = 0; i < len; i++) if (Math.abs(h[i]) > peak) peak = Math.abs(h[i]);
     irs.push(h);
   }
-  // one scale for all twelve: the loudest of them peaks at 1
+  // The knocks of the action get a response of their own (13th and 14th): the sum with true
+  // delays and true loss as it is, so that it rings as long as a board does (a resonance at
+  // 350 Hz falls by 20 dB in 100 ms). A knock is over in a moment: it does not matter that
+  // this response is louder at some pitches than at others. As loud, from 200 Hz to 2 kHz,
+  // as the even response of the middle of the bridge.
+  for (let q = 0; q < 2; q++) {
+    const re = coherent[q], im = new Float64Array(N);
+    fft(re, im);
+    let e = 0;
+    for (let i = 0; i <= N / 2; i++) {
+      const f = (i * fs) / N, g = f < 20 ? 0 : Math.pow(10, chainGain(f) / 20);
+      re[i] *= g; im[i] *= -g;
+      if (f > 200 && f < 2000) e += re[i] * re[i] + im[i] * im[i];
+      if (i > 0 && i < N / 2) { re[N - i] = re[i]; im[N - i] = -im[i]; }
+    }
+    fft(re, im);
+    const even = irs[4 + q], ere = new Float64Array(N), eim = new Float64Array(N);
+    ere.set(even); fft(ere, eim);
+    let want = 0;
+    for (let i = 0; i <= N / 2; i++) { const f = (i * fs) / N; if (f > 200 && f < 2000) want += ere[i] * ere[i] + eim[i] * eim[i]; }
+    const scale = Math.sqrt(want / e), h = new Float64Array(len);
+    for (let i = 0; i < len; i++) h[i] = (re[i] / N) * scale;
+    for (let i = 0; i < fade; i++) h[len - 1 - i] *= i / fade;
+    for (let i = 0; i < len; i++) if (Math.abs(h[i]) > peak) peak = Math.abs(h[i]);
+    irs.push(h);
+  }
+  // one scale for all of them: the loudest peaks at 1
   return { version: MODEL_VERSION, fs, modes: modes.length, irs: irs.map((h) => { const o = new Float32Array(len); for (let i = 0; i < len; i++) o[i] = h[i] / peak; return o; }) };
 }
