@@ -207,6 +207,13 @@ const PIANO = {
   // the strings make them whisper for a moment. Those three are estimates.
   knock: 2.1, knockGrow: 1.1, knockMs: 6, keyUp: 0.3, pedalThump: 0.9, damperHiss: 0.3,
   uneven: 0.06,       // and the hammer does not strike them equally hard
+  // NO TWO STRIKES THE SAME. Each strike draws, evenly within +- these shares: the hammer's
+  // speed, the felt's stiffness, the share of the blow each string takes, the knock's size and
+  // length. lag: up to this many seconds between the first and the last string the hammer
+  // meets. While the felt is on the strings its stiffness has noise of +- feltNoise, below
+  // feltNoiseHz. knockNoise: noise in the knock against its push and pull.
+  // Estimates set by ear: the recordings have one take of each note and strength.
+  vary: { speed: 0.03, felt: 0.05, share: 0.06, lag: 30e-6, feltNoise: 0.1, feltNoiseHz: 3000, knock: 0.2, knockLen: 0.2, knockNoise: 1 },
 };
 const REF = 5e-4;     // the compression (m) at which feltF is given
 
@@ -261,7 +268,8 @@ class PString {
     this.a = 0; this.a1 = 1; this.m = 1; this.g = 1; this.lp = 0; // loss filter
     this.apN = 0; this.c = 0; this.ax = new Float64Array(MAX_SECTIONS); this.ay = new Float64Array(MAX_SECTIONS);
     this.ha = 1; this.hb = 2;                          // where the hammer strikes: two taps into the loop
-    this.share = 1;                                    // of the hammer's force
+    this.share = 1; this.share0 = 1;                   // of the hammer's force: this strike, and the key's own
+    this.lag = 0;                                      // samples before the hammer meets this string
     this.f = 440;
   }
 
@@ -321,7 +329,7 @@ class Voice {
     let c = null;
     this.strings.forEach((s, i) => {
       s.f = f * Math.pow(2, (detune * (det[i] - mean)) / 1200);
-      s.share = share[i] / sum;
+      s.share = s.share0 = share[i] / sum;
       const d = designDamping(s.f, own * rate, PIANO.b3, fs, PIANO.flat);
       s.a = d.a; s.a1 = 1 - d.a; s.m = d.m; s.g = d.g;
       if (c == null) c = designDispersion(f, B, apN, d.a, d.m, fs);
@@ -352,10 +360,15 @@ class Voice {
     this.dampOn = this.hasDamper ? Math.exp(-interp(PIANO.damper, m, true) / f) : 1;
   }
 
-  // the hammer is thrown at the strings; v: key velocity 0..1, hard: felt hardness -1..1
-  strike(v, hard) {
-    this.hv = hammerSpeed(v); this.hy = 0; this.sy = 0; this.hu = 0; this.hF = 0; this.hN = 0;
-    this.hard = Math.pow(3, hard || 0);
+  // the hammer is thrown at the strings; v: key velocity 0..1, hard: felt hardness -1..1,
+  // rnd: random source 0..1 for what differs from strike to strike
+  strike(v, hard, rnd) {
+    const vary = PIANO.vary, u = () => 2 * rnd() - 1;
+    this.hv = hammerSpeed(v) * (1 + vary.speed * u()); this.hy = 0; this.sy = 0; this.hu = 0; this.hF = 0; this.hN = 0;
+    this.hard = Math.pow(3, hard || 0) * (1 + vary.felt * u());
+    let sum = 0, first = Infinity;
+    for (const s of this.strings) { s.share = s.share0 * (1 + vary.share * u()); sum += s.share; s.lag = Math.round(rnd() * vary.lag * this.fs); first = Math.min(first, s.lag); }
+    for (const s of this.strings) { s.share *= this.n / sum; s.lag -= first; }
     this.contact = true;
     this.keyDown = true; this.dropped = false;
     this.dg = this.dgT = 1;                            // the damper is up before the hammer arrives
@@ -407,7 +420,7 @@ class Voice {
     this.hu = xi > 0 ? Math.pow(xi, p) : 0;
     this.hF = F;
     if (dv !== 0) for (let i = 0; i < n; i++) {
-      const s = ss[i], b = s.b, m = s.mask, w = s.w - 1, d = dv * s.share;
+      const s = ss[i], b = s.b, m = s.mask, w = s.w - 1, d = this.hN < s.lag ? 0 : dv * s.share;
       b[(w - s.ha) & m] += d; b[(w - s.hb) & m] -= d;
     }
     this.hN++;
@@ -504,7 +517,8 @@ const MAX_VOICES = 48;  // notes ringing at once; beyond that the quietest relea
 const SILENT = 3e-6;    // string velocity (m/s) below which a note is over: 110 dB under mf
 
 class PianoEngine {
-  constructor(fs) {
+  // rnd: random source 0..1 (Math.random; a seeded one for renders that repeat)
+  constructor(fs, rnd = Math.random) {
     this.fs = fs;
     this.queue = []; this.qh = 0;
     this.voices = new Array(128).fill(null);
@@ -512,7 +526,7 @@ class PianoEngine {
     this.live = [];
     this.pedal = false;
     this.P = { hard: 0, noise: 1 };
-    this.thumps = []; this.hiss = 0; this.rnd = mulberry32(0x5eed);
+    this.thumps = []; this.hiss = 0; this.rnd = rnd;
     this.acc = [0, 1, 2, 3, 4, 5, 6].map(() => new Float64Array(128));
     this.bus = new Float64Array(128);
     this.sympathy = new Sympathy(fs);
@@ -567,7 +581,7 @@ class PianoEngine {
       case 'n':
         if (!v) break;
         this.wake(v);
-        v.strike(ev.v, this.P.hard);
+        v.strike(ev.v, this.P.hard, this.rnd);
         this.thump(v, PIANO.knock * Math.pow(hammerSpeed(ev.v), PIANO.knockGrow), PIANO.knockMs);
         break;
       case 'o':
@@ -686,4 +700,4 @@ if (typeof registerProcessor === 'function') {
   });
 }
 
-export { PianoEngine, PIANO, LO, HI, keyHz, inharmonicity, hammerSpeed, interp, STRETCH };
+export { PianoEngine, PIANO, mulberry32, LO, HI, keyHz, inharmonicity, hammerSpeed, interp, STRETCH };

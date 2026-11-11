@@ -231,3 +231,30 @@ test('the engine renders seven channels (six places on the bridge, and the knock
   assert.ok(err < 1e-5, `difference ${err}`);
   assert.ok(used >= 5, `${used} channels carry sound`);
 });
+
+// ---- no two strikes the same ------------------------------------------------------------
+// PIANO.vary with every amount 0
+const noVariation = () => ({ ...Object.fromEntries(Object.keys(PIANO.vary).map((k) => [k, 0])), feltNoiseHz: PIANO.vary.feltNoiseHz });
+
+test('no two strikes are the same; the same seed gives the same strike', () => {
+  const strike = (seed) => { const e = engine({}, FS, seed); e.post({ type: 'n', t: 0.01, m: 60, v: 0.5 }); return render(e, 0.3); };
+  const a = strike(1), b = strike(2), c = strike(1);
+  const d = a.map((x, i) => x - b[i]), diff = db(rms(d, 0.01, 0.29)) - db(rms(a, 0.01, 0.29));
+  assert.ok(diff > -40, `two seeds differ by ${diff.toFixed(1)} dB`);
+  assert.deepEqual(a, c);
+});
+
+test('the variation leaves the mean level of a note where it was', () => {
+  for (const m of [36, 60, 84]) {
+    const level = (seed) => { const e = engine({}, FS, seed); e.post({ type: 'n', t: 0.01, m, v: 0.5 }); return rms(render(e, 0.5), 0.05, 0.49); };
+    let s = 0;
+    for (let k = 1; k <= 8; k++) s += level(k) ** 2;
+    const mean = db(Math.sqrt(s / 8)), still = db(withPiano({ vary: noVariation() }, () => level(1)));
+    assert.ok(Math.abs(mean - still) < 0.5, `key ${m}: ${(mean - still).toFixed(2)} dB`);
+  }
+});
+
+test('the detuning of a key does not depend on the strike', () => {
+  const pitches = (seed) => engine({}, FS, seed).voices[60].strings.map((s) => s.f);
+  assert.deepEqual(pitches(1), pitches(2));
+});

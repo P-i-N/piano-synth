@@ -1,5 +1,5 @@
 // Small signal-analysis helpers for the offline engine tests (after vibetar's test/util.mjs).
-import { PianoEngine, keyHz } from '../js/worklet.js';
+import { PianoEngine, keyHz, mulberry32 } from '../js/worklet.js';
 
 export const FS = 48000;
 export { keyHz };
@@ -70,8 +70,9 @@ export function peak(x, t0 = 0, t1 = x.length / FS, fs = FS) {
   return p;
 }
 
-export function engine(cfg = {}, fs = FS) {
-  const e = new PianoEngine(fs);
+// seed: the random source, so that a render repeats
+export function engine(cfg = {}, fs = FS, seed = 1) {
+  const e = new PianoEngine(fs, mulberry32(seed));
   e.configure(cfg);
   return e;
 }
