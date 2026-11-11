@@ -202,10 +202,10 @@ const PIANO = {
   // THE NOISES OF THE ACTION, as forces on the bridge (N), not modelled parts. The knock of key
   // and hammer when a note is struck is a push and pull of `knockMs` milliseconds: `knock` newtons at
   // a hammer speed of 1 m/s, growing with speed to the power `knockGrow`. Matched to the knock
-  // in recorded high notes (C6 to C8, soft to loud).
+  // in recorded high notes (C6 to C8, soft to loud), with its noise (vary.knockNoise).
   // A key coming up and the pedal going down or up are softer pushes; the dampers leaving
   // the strings make them whisper for a moment. Those three are estimates.
-  knock: 2.1, knockGrow: 1.1, knockMs: 6, keyUp: 0.3, pedalThump: 0.9, damperHiss: 0.3,
+  knock: 1.9, knockGrow: 1.1, knockMs: 6, keyUp: 0.27, pedalThump: 0.81, damperHiss: 0.3,
   uneven: 0.06,       // and the hammer does not strike them equally hard
   // NO TWO STRIKES THE SAME. Each strike draws, evenly within +- these shares: the hammer's
   // speed, the felt's stiffness, the share of the blow each string takes, the knock's size and
@@ -532,6 +532,10 @@ class PianoEngine {
     this.pedal = false;
     this.P = { hard: 0, noise: 1 };
     this.thumps = []; this.hiss = 0; this.rnd = rnd;
+    // the knocks' noise: white noise through two one-pole lowpasses at 1 kHz (one lets too much
+    // through at 8 kHz), scaled to the RMS of their push and pull
+    const ka = (this.knA = Math.exp((-TAU * 1000) / fs));
+    this.knS = Math.sqrt((1.5 * (1 - ka * ka) ** 3) / ((1 - ka) ** 4 * (1 + ka * ka)));
     this.acc = [0, 1, 2, 3, 4, 5, 6].map(() => new Float64Array(128));
     this.bus = new Float64Array(128);
     this.sympathy = new Sympathy(fs);
@@ -559,10 +563,12 @@ class PianoEngine {
 
   flush() { this.queue.length = 0; this.qh = 0; }
 
-  // a push of `amp` newtons lasting `ms`: a knock of the action
+  // a push of `amp` newtons lasting `ms`, with noise: a knock of the action
   thump(v, amp, ms) {
     if (!v || !(this.P.noise > 0) || this.thumps.length > 64) return;
-    this.thumps.push({ amp: amp * this.P.noise, i: 0, n: Math.max(8, Math.round((ms * this.fs) / 1000)) });
+    const vary = PIANO.vary, u = () => 2 * this.rnd() - 1;
+    amp *= 1 + vary.knock * u(); ms *= 1 + vary.knockLen * u();
+    this.thumps.push({ amp: amp * this.P.noise, i: 0, n: Math.max(8, Math.round((ms * this.fs) / 1000)), lp: 0, lp2: 0 });
   }
 
   wake(v) {
@@ -649,9 +655,15 @@ class PianoEngine {
       }
       this.sympathy.run(bus, acc, n, this.pedal, pk);
       // the knocks of the action
+      const ka = this.knA, kn = PIANO.vary.knockNoise * this.knS;
       for (let k = this.thumps.length - 1; k >= 0; k--) {
         const t = this.thumps[k], to = acc[6];
-        for (let j = Math.max(0, -t.i); j < n && t.i + j < t.n; j++) { const x = (TAU * (t.i + j)) / t.n; to[j] += t.amp * Math.sin(x) * (0.5 - 0.5 * Math.cos(x)); }
+        for (let j = Math.max(0, -t.i); j < n && t.i + j < t.n; j++) {
+          const x = (TAU * (t.i + j)) / t.n;
+          t.lp = ka * t.lp + (1 - ka) * (2 * this.rnd() - 1);
+          t.lp2 = ka * t.lp2 + (1 - ka) * t.lp;
+          to[j] += t.amp * (Math.sin(x) + kn * t.lp2) * (0.5 - 0.5 * Math.cos(x));
+        }
         t.i += n;
         if (t.i >= t.n) this.thumps.splice(k, 1);
       }

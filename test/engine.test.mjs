@@ -274,3 +274,12 @@ test('the felt has noise while it is on the strings', () => {
 test('the top key at full strength stays finite with the felt noise', () => {
   for (const seed of [1, 2, 3]) assert.ok(strikeOf(108, 1, seed).every(Number.isFinite), `seed ${seed}`);
 });
+
+test('the knock of the action differs from strike to strike', () => {
+  const knock = { ...noVariation(), knock: PIANO.vary.knock, knockLen: PIANO.vary.knockLen, knockNoise: PIANO.vary.knockNoise };
+  withPiano({ vary: knock }, () => {
+    // the knocks' own channel, in the last block rendered
+    const e = (seed) => { const x = engine({ noise: 1 }, FS, seed), ch = [0, 1, 2, 3, 4, 5, 6].map(() => new Float32Array(1024)); x.post({ type: 'n', t: 0.001, m: 96, v: 0.5 }); for (let i = 0; i < 1024; i += 128) x.render(ch.map((c) => c.subarray(i, i + 128)), 128, i); return ch[6]; };
+    assert.notDeepEqual(e(1), e(2));
+  });
+});
