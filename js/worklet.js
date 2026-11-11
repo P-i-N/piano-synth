@@ -207,6 +207,11 @@ const PIANO = {
   // the strings make them whisper for a moment. Those three are estimates.
   knock: 2.1, knockGrow: 1.1, knockMs: 6, keyUp: 0.3, pedalThump: 0.9, damperHiss: 0.3,
   uneven: 0.06,       // and the hammer does not strike them equally hard
+  // and they are not equally stiff: B of each string within +- this share of the key's. With
+  // equal strings the beat of partial k is k times the fundamental's, and the notches between
+  // the beating partials sweep evenly over the spectrum: a flanger. An estimate: at the same
+  // pitch B grows with the square of the wire's diameter, made to about 1 %.
+  stiff: 0.02,
   // NO TWO STRIKES THE SAME. Each strike draws, evenly within +- these shares: the hammer's
   // speed, the felt's stiffness, the share of the blow each string takes, the knock's size and
   // length. While the felt is on the strings its stiffness has noise of +- feltNoise, below
@@ -324,15 +329,17 @@ class Voice {
     // the strings of the note: detuned around its pitch, struck not quite equally
     const det = [], share = [];
     for (let i = 0; i < n; i++) { det.push(n > 1 ? 2 * rnd() - 1 : 0); share.push(1 + PIANO.uneven * (2 * rnd() - 1)); }
+    const stiff = [];
+    for (let i = 0; i < n; i++) stiff.push(1 + PIANO.stiff * (2 * rnd() - 1));
     const mean = det.reduce((a, x) => a + x, 0) / n, sum = share.reduce((a, x) => a + x, 0) / n;
+    const stiffMean = stiff.reduce((a, x) => a + x, 0) / n;
     const apN = sectionsFor(f, B, fs);
-    let c = null;
     this.strings.forEach((s, i) => {
       s.f = f * Math.pow(2, (detune * (det[i] - mean)) / 1200);
       s.share = s.share0 = share[i] / sum;
       const d = designDamping(s.f, own * rate, PIANO.b3, fs, PIANO.flat);
       s.a = d.a; s.a1 = 1 - d.a; s.m = d.m; s.g = d.g;
-      if (c == null) c = designDispersion(f, B, apN, d.a, d.m, fs);
+      const c = designDispersion(f, (B * stiff[i]) / stiffMean, apN, d.a, d.m, fs);
       s.apN = c ? apN : 0; s.c = c;
       const w = (TAU * s.f) / fs, N = fs / s.f;
       const D = Math.max(2.2, N - lpDelay(s.a, s.m, w) - s.apN * apDelay(c, w));

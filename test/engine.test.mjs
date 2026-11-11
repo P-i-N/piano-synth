@@ -119,7 +119,7 @@ test('a harder blow is louder on every part of the keyboard', () => {
 
 test('tuning a note takes little from its highs: nearby pitches keep them equally long', () => {
   // the loop length of each of these pitches ends on another fraction of a sample
-  const rates = withPiano({ detune: 0, uneven: 0 }, () => {
+  const rates = withPiano({ detune: 0, uneven: 0, stiff: 0 }, () => {
     const out = [];
     for (let i = 0; i < 8; i++) {
       const e = engine(), v = e.voices[76];
@@ -159,7 +159,7 @@ test('three strings give a note two decays: quick at first, slow after', () => {
   const x = note(60, 0.6, 9), early = rate(x, 0.1, 1.1), late = rate(x, 5, 8);
   assert.ok(early > 2 * late && late > 0.5, `C4: ${early.toFixed(1)} dB/s at first, ${late.toFixed(1)} dB/s after`);
   // strings in perfect unison, struck equally, move together: only the quick decay is left
-  const y = withPiano({ detune: 0, uneven: 0 }, () => note(60, 0.6, 5)), e2 = rate(y, 0.1, 1.1), l2 = rate(y, 2.5, 4.5);
+  const y = withPiano({ detune: 0, uneven: 0, stiff: 0 }, () => note(60, 0.6, 5)), e2 = rate(y, 0.1, 1.1), l2 = rate(y, 2.5, 4.5);
   assert.ok(l2 > 0.8 * e2, `C4 in unison: ${e2.toFixed(1)} dB/s at first, ${l2.toFixed(1)} dB/s after`);
 });
 
@@ -280,4 +280,36 @@ test('the knock of the action differs from strike to strike', () => {
     const e = (seed) => { const x = engine({ noise: 1 }, FS, seed), ch = [0, 1, 2, 3, 4, 5, 6].map(() => new Float32Array(1024)); x.post({ type: 'n', t: 0.001, m: 96, v: 0.5 }); for (let i = 0; i < 1024; i += 128) x.render(ch.map((c) => c.subarray(i, i + 128)), 128, i); return ch[6]; };
     assert.notDeepEqual(e(1), e(2));
   });
+});
+
+// ---- the strings of a unison ------------------------------------------------------------
+// Partials k of each string of key m, each string's loop run on its own (no bridge): an
+// impulse, then `secs` of the loop, then the peak near each expected partial.
+function stringPartials(m, ks, secs = 4) {
+  const v = engine().voices[m], B = inharmonicity(m), f0 = keyHz(m), n = Math.floor(secs * FS);
+  return v.strings.map((s) => {
+    s.clear();
+    const x = new Float64Array(n);
+    s.b[(s.w - 1 - s.ha) & s.mask] = 1;
+    for (let i = 0; i < n; i++) { const u = s.read(); x[i] = u; s.b[s.w] = u; s.w = (s.w + 1) & s.mask; }
+    return ks.map((k) => freqNear(x, k * f0 * Math.sqrt((1 + B * k * k) / (1 + B)), 0.5, secs - 1, 0.01).f);
+  });
+}
+
+test('the strings of a unison are not equally stiff: their beats do not grow in step with the partial', () => {
+  // With equally stiff strings the beat of partial k is k times the beat of the fundamental:
+  // the notches between the beating partials sweep evenly over the spectrum, a flanger.
+  const keys = [29, 31, 34, 36, 38, 41, 43, 46], lines = [];
+  let uneven = 0;
+  for (const m of keys) {
+    const p = stringPartials(m, [4, 20]);
+    let most = 0;
+    for (let a = 0; a < p.length; a++) for (let b = a + 1; b < p.length; b++) {
+      const low = (p[b][0] - p[a][0]) / 4, high = (p[b][1] - p[a][1]) / 20;
+      most = Math.max(most, Math.abs(high - low) / Math.max(Math.abs(low), 0.002));
+    }
+    lines.push(`${m}: ${(100 * most).toFixed(0)} %`);
+    if (most > 0.25) uneven++;
+  }
+  assert.ok(uneven >= 6, `beat per partial, 20th against 4th: ${lines.join(', ')}`);
 });

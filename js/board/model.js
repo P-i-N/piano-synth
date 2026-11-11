@@ -14,7 +14,7 @@
 //
 // Building takes a few seconds; it is done once, in a worker, and kept (see js/audio.js).
 
-export const MODEL_VERSION = 6;
+export const MODEL_VERSION = 7;
 
 // Lengths in metres. x runs along the keyboard from the bass side, y from the keyboard to
 // the tail, z up. Sources: Ege, Boutillon and Rebillat (2013) and Boutillon and Ege (2013) for
