@@ -209,13 +209,12 @@ const PIANO = {
   uneven: 0.06,       // and the hammer does not strike them equally hard
   // NO TWO STRIKES THE SAME. Each strike draws, evenly within +- these shares: the hammer's
   // speed, the felt's stiffness, the share of the blow each string takes, the knock's size and
-  // length. lag: up to this many seconds between the first and the last string the hammer
-  // meets. While the felt is on the strings its stiffness has noise of +- feltNoise, below
+  // length. While the felt is on the strings its stiffness has noise of +- feltNoise, below
   // feltNoiseHz. (Above about 1 kHz, even +-3 % adds highs that do not grow with the blow:
   // a soft note is then as bright as a loud one.) knockNoise: noise in the knock against its
   // push and pull.
   // Estimates set by ear: the recordings have one take of each note and strength.
-  vary: { speed: 0.03, felt: 0.05, share: 0.06, lag: 30e-6, feltNoise: 0.1, feltNoiseHz: 500, knock: 0.2, knockLen: 0.2, knockNoise: 0.5 },
+  vary: { speed: 0.03, felt: 0.05, share: 0.06, feltNoise: 0.1, feltNoiseHz: 500, knock: 0.2, knockLen: 0.2, knockNoise: 0.5 },
 };
 const REF = 5e-4;     // the compression (m) at which feltF is given
 
@@ -271,7 +270,6 @@ class PString {
     this.apN = 0; this.c = 0; this.ax = new Float64Array(MAX_SECTIONS); this.ay = new Float64Array(MAX_SECTIONS);
     this.ha = 1; this.hb = 2;                          // where the hammer strikes: two taps into the loop
     this.share = 1; this.share0 = 1;                   // of the hammer's force: this strike, and the key's own
-    this.lag = 0;                                      // samples before the hammer meets this string
     this.f = 440;
   }
 
@@ -368,9 +366,9 @@ class Voice {
     const vary = PIANO.vary, u = () => 2 * rnd() - 1;
     this.hv = hammerSpeed(v) * (1 + vary.speed * u()); this.hy = 0; this.sy = 0; this.hu = 0; this.hF = 0; this.hN = 0;
     this.hard = Math.pow(3, hard || 0) * (1 + vary.felt * u());
-    let sum = 0, first = Infinity;
-    for (const s of this.strings) { s.share = s.share0 * (1 + vary.share * u()); sum += s.share; s.lag = Math.round(rnd() * vary.lag * this.fs); first = Math.min(first, s.lag); }
-    for (const s of this.strings) { s.share *= this.n / sum; s.lag -= first; }
+    let sum = 0;
+    for (const s of this.strings) { s.share = s.share0 * (1 + vary.share * u()); sum += s.share; }
+    for (const s of this.strings) s.share *= this.n / sum;
     this.rnd = rnd; this.fn = 0; this.fnA = Math.exp((-TAU * vary.feltNoiseHz) / this.fs);
     this.contact = true;
     this.keyDown = true; this.dropped = false;
@@ -425,7 +423,7 @@ class Voice {
     this.hu = xi > 0 ? Math.pow(xi, p) : 0;
     this.hF = F;
     if (dv !== 0) for (let i = 0; i < n; i++) {
-      const s = ss[i], b = s.b, m = s.mask, w = s.w - 1, d = this.hN < s.lag ? 0 : dv * s.share;
+      const s = ss[i], b = s.b, m = s.mask, w = s.w - 1, d = dv * s.share;
       b[(w - s.ha) & m] += d; b[(w - s.hb) & m] -= d;
     }
     this.hN++;
