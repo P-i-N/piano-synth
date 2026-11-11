@@ -72,3 +72,22 @@ test('with the noises switched off there is no knock; the pedal makes a soft thu
   assert.ok(ratio > -50 && ratio < -15, `pedal down: ${ratio.toFixed(1)} dB against a medium C4`);
   assert.ok(rms(x, 0.6, 0.9) > 0, 'pedal up is heard too');
 });
+
+import { throughBoard, aLevel } from './util.mjs';
+// The knock against its note (A-weighted dB, the first 170 ms). The knock does not touch the
+// strings: the note with the noises minus the note without them is the knock alone.
+function knockShare(m, v) {
+  const run = (noise) => steady(() => { const e = engine({ noise }); e.post({ type: 'n', t: 0.02, m, v }); return Float32Array.from(throughBoard(e, 0.5).L); });
+  const a = run(1), b = run(0), d = a.map((x, i) => x - b[i]), st = Math.floor(0.015 * FS), n = 8192;
+  return aLevel(d, st, n) - aLevel(b, st, n);
+}
+
+test('the knock is no louder against its note in the bass than in the middle', () => {
+  // The recordings show the knock only from C6 up; below, the note covers it. Heard: in the
+  // bass the knock stood out (C2: 8 dB more against its note than C4).
+  const c4 = knockShare(60, 0.6);
+  for (const m of [24, 36, 48]) {
+    const k = knockShare(m, 0.6);
+    assert.ok(k < c4 + 2, `key ${m}: ${k.toFixed(1)} dB against its note, C4 ${c4.toFixed(1)}`);
+  }
+});

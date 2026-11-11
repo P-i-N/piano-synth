@@ -206,6 +206,10 @@ const PIANO = {
   // A key coming up and the pedal going down or up are softer pushes; the dampers leaving
   // the strings make them whisper for a moment. Those three are estimates.
   knock: 2.1, knockGrow: 1.1, knockMs: 6, keyUp: 0.3, pedalThump: 0.9, damperHiss: 0.3,
+  // The knocks of a key, dB by key. Below C6 the recordings do not show the knock (the note
+  // covers it); with one force for all keys it was heard too loud in the bass: against its
+  // note 8 dB more at C2 than at C4. Set so that the bass is no louder than C4. An estimate.
+  knockKey: [[21, -8], [36, -8], [48, -4], [60, 0], [108, 0]],
   uneven: 0.06,       // and the hammer does not strike them equally hard
   // and they are not equally stiff: B of each string within +- this share of the key's. With
   // equal strings the beat of partial k is k times the fundamental's, and the notches between
@@ -365,6 +369,7 @@ class Voice {
     this.hK = interp(PIANO.feltF, m, true) / n / Math.pow(REF, this.hP);
     this.hA = val(PIANO.feltA, m) * fs;
     this.dampOn = this.hasDamper ? Math.exp(-interp(PIANO.damper, m, true) / f) : 1;
+    this.knock = Math.pow(10, interp(PIANO.knockKey, m) / 20);
   }
 
   // the hammer is thrown at the strings; v: key velocity 0..1, hard: felt hardness -1..1,
@@ -598,11 +603,11 @@ class PianoEngine {
         if (!v) break;
         this.wake(v);
         v.strike(ev.v, this.P.hard, this.rnd);
-        this.thump(v, PIANO.knock * Math.pow(hammerSpeed(ev.v), PIANO.knockGrow), PIANO.knockMs);
+        this.thump(v, v.knock * PIANO.knock * Math.pow(hammerSpeed(ev.v), PIANO.knockGrow), PIANO.knockMs);
         break;
       case 'o':
         if (!v) break;
-        if (v.keyDown) this.thump(v, PIANO.keyUp, PIANO.knockMs);
+        if (v.keyDown) this.thump(v, v.knock * PIANO.keyUp, PIANO.knockMs);
         v.keyDown = false;
         if (!this.pedal && !v.dropped) v.damp();
         break;
