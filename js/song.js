@@ -5,9 +5,12 @@
 // velocities 1 .. 127. (vibetar's song is a grid of columns; a piano roll needs free lengths,
 // and a MIDI file maps onto this one to one.)
 
+import { compress, decompress } from './lzma.js';
+
 export const PPQ = 480;
 export const LO = 21, HI = 108;
 export const MAX_NOTES = 20000;
+const MAX_LINK_BYTES = 1 << 20;   // a binary song unpacked from a link: MAX_NOTES take about 200 kB
 
 const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 export const noteName = (m) => NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1);
@@ -156,6 +159,132 @@ export function unpackSong(p) {
   return song;
 }
 
+// ---- binary link -------------------------------------------------------------
+//
+// The packed song as bytes, laid out for LZMA: like values next to like (columns, not rows),
+// times in a quantum (the largest that divides them all), multi-byte numbers in byte planes
+// (all high bytes, then all low bytes). Measured on the demos, as written and as played:
+//
+//   title     varint length, UTF-8
+//   settings  varint mask of the settings that differ from a new song's, then their values
+//             (bpm, grid, beats a bar, loop start and end, then `i` and `x` as packed)
+//   quantum   varint, ticks
+//   notes     varint count; planes of starts (quanta after the note before); planes of
+//             lengths (quanta); keys, one byte each; velocities, one byte each
+//   pedal     varint count of values; planes of each down and up (quanta after the one before)
+//
+// A number is a varint: an integer x as 2·zigzag(x), else 2·zigzag(round(1000 x)) + 1.
+// The delay time is its index in DELAY_TIMES. Planes: a byte for the width w, then w planes.
+
+class ByteWriter {
+  constructor() { this.out = []; }
+  varint(x) {
+    while (x >= 128) { this.out.push((x & 127) | 128); x = Math.floor(x / 128); }
+    this.out.push(x);
+  }
+  number(x) {
+    const zz = (k) => (k < 0 ? -2 * k - 1 : 2 * k);
+    this.varint(Number.isInteger(x) ? 2 * zz(x) : 2 * zz(Math.round(x * 1000)) + 1);
+  }
+  planes(values) {
+    let max = 0;
+    for (const v of values) if (v > max) max = v;
+    let w = 0;
+    while (max >= 2 ** (8 * w)) w++;
+    this.out.push(w);
+    for (let k = w - 1; k >= 0; k--) for (const v of values) this.out.push(Math.floor(v / 2 ** (8 * k)) & 255);
+  }
+}
+
+class ByteReader {
+  constructor(bytes) { this.bytes = bytes; this.pos = 0; }
+  byte() {
+    if (this.pos >= this.bytes.length) throw new Error('bad song data');
+    return this.bytes[this.pos++];
+  }
+  varint() {
+    let x = 0;
+    for (let mul = 1; mul <= 2 ** 49; mul *= 128) {
+      const b = this.byte();
+      x += (b & 127) * mul;
+      if (b < 128) return x;
+    }
+    throw new Error('bad song data');
+  }
+  number() {
+    const v = this.varint(), k = Math.floor(v / 2), x = k % 2 ? -(k + 1) / 2 : k / 2;
+    return v % 2 ? x / 1000 : x;
+  }
+  planes(n) {
+    const w = this.byte(), out = new Array(n).fill(0);
+    if (w > 6) throw new Error('bad song data');
+    for (let k = 0; k < w; k++) for (let i = 0; i < n; i++) out[i] = out[i] * 256 + this.byte();
+    return out;
+  }
+}
+
+const gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
+const DELAY_KEYS = Object.keys(DELAY_TIMES);
+// the settings of a packed song as one list, in link order
+const settingsOf = (p) => [p.b, ...p.g, ...(p.l || [0, 0]), ...p.i, ...p.x];
+
+function songToBytes(song) {
+  const p = packSong(song), w = new ByteWriter();
+  const title = new TextEncoder().encode(p.t);
+  w.varint(title.length);
+  for (const b of title) w.out.push(b);
+
+  const values = settingsOf(p), defaults = settingsOf(packSong(newSong()));
+  let mask = 0;
+  values.forEach((v, k) => { if (v !== defaults[k]) mask += 2 ** k; });
+  w.varint(mask);
+  values.forEach((v, k) => { if (v !== defaults[k]) w.number(typeof v === 'string' ? DELAY_KEYS.indexOf(v) : v); });
+
+  const starts = [], lengths = [], keys = [], vels = [], pedal = [];
+  for (let i = 0; i < p.n.length; i += 4) { starts.push(p.n[i]); lengths.push(p.n[i + 1]); keys.push(p.n[i + 2]); vels.push(p.n[i + 3]); }
+  let last = 0;
+  for (const x of p.p) { pedal.push(x - last); last = x; }
+  const q = [...starts, ...lengths, ...pedal].reduce(gcd, 0) || 1;
+  w.varint(q);
+  w.varint(keys.length);
+  w.planes(starts.map((x) => x / q));
+  w.planes(lengths.map((x) => x / q));
+  for (const b of [...keys, ...vels]) w.out.push(b);
+  w.varint(pedal.length);
+  w.planes(pedal.map((x) => x / q));
+  return Uint8Array.from(w.out);
+}
+
+// bytes -> the packed form, which unpackSong() checks
+function bytesToPacked(bytes) {
+  const r = new ByteReader(bytes);
+  const tlen = r.varint();
+  if (tlen > bytes.length - r.pos) throw new Error('bad song data');
+  const t = new TextDecoder().decode(bytes.subarray(r.pos, r.pos + tlen));
+  r.pos += tlen;
+
+  const values = settingsOf(packSong(newSong())), mask = r.varint();
+  for (let k = 0; mask >= 2 ** k; k++) {
+    if (Math.floor(mask / 2 ** k) % 2 === 0) continue;
+    const v = r.number();
+    if (k < values.length) values[k] = typeof values[k] === 'string' ? DELAY_KEYS[v] : v;
+  }
+
+  const q = r.varint(), count = r.varint();
+  if (count > bytes.length) throw new Error('bad song data');
+  const starts = r.planes(count), lengths = r.planes(count), n = [];
+  const keys = Array.from({ length: count }, () => r.byte()), vels = Array.from({ length: count }, () => r.byte());
+  for (let i = 0; i < count; i++) n.push(starts[i] * q, lengths[i] * q, keys[i], vels[i]);
+  const pcount = r.varint();
+  if (pcount > bytes.length) throw new Error('bad song data');
+  const p = [];
+  let last = 0;
+  for (const d of r.planes(pcount)) p.push((last += d * q));
+
+  const [b, grid, bpb, la, lb] = values, ni = INST_KEYS.length;
+  return { t, b, g: [grid, bpb], n, p, l: [la, lb], i: values.slice(5, 5 + ni), x: values.slice(5 + ni) };
+}
+
 const b64u = {
   enc(bytes) {
     let s = '';
@@ -175,21 +304,19 @@ async function pipe(bytes, stream) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-// "z…" = deflate-raw + base64url, "j…" = plain JSON + base64url
+// "x…" = binary song + LZMA + base64url. Read only, from older links:
+// "z…" = JSON + deflate-raw + base64url, "j…" = JSON + base64url.
 export async function encodeSong(song) {
-  const bytes = new TextEncoder().encode(JSON.stringify(packSong(song)));
-  if (typeof CompressionStream === 'function') {
-    try { return 'z' + b64u.enc(await pipe(bytes, new CompressionStream('deflate-raw'))); } catch (e) { /* fall through */ }
-  }
-  return 'j' + b64u.enc(bytes);
+  return 'x' + b64u.enc(compress(songToBytes(song)));
 }
 
 export async function decodeSong(str) {
   const kind = str[0];
-  let bytes = b64u.dec(str.slice(1));
-  if (kind === 'z') bytes = await pipe(bytes, new DecompressionStream('deflate-raw'));
-  else if (kind !== 'j') throw new Error('unknown link format');
-  return unpackSong(JSON.parse(new TextDecoder().decode(bytes)));
+  const bytes = b64u.dec(str.slice(1));
+  if (kind === 'x') return unpackSong(bytesToPacked(decompress(bytes, MAX_LINK_BYTES)));
+  if (kind === 'z') return unpackSong(JSON.parse(new TextDecoder().decode(await pipe(bytes, new DecompressionStream('deflate-raw')))));
+  if (kind === 'j') return unpackSong(JSON.parse(new TextDecoder().decode(bytes)));
+  throw new Error('unknown link format');
 }
 
 // ---- playback compilation ----------------------------------------------------

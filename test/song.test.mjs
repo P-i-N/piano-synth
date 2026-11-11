@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as S from '../js/song.js';
+import { DEMOS } from '../js/demos.js';
 
 function sample() {
   const s = S.newSong();
@@ -16,8 +17,44 @@ function sample() {
 
 test('a song survives the link round trip', async () => {
   const s = sample(), link = await S.encodeSong(s);
-  assert.match(link, /^[zj][A-Za-z0-9_-]+$/);
+  assert.match(link, /^x[A-Za-z0-9_-]+$/);
   assert.deepEqual(await S.decodeSong(link), s);
+});
+
+test('a binary link made with the first version of the format still loads', async () => {
+  // frozen: new settings go at the end of the settings mask; these positions must keep their meaning
+  const s = await S.decodeSong('xOwUTLvTxEGq2PisBJSmQuyZ4Ci8-fejeJ12HAwFN3TNl2oupmR7wNRwHXnPYhd4ZNX4YdtXMKYs');
+  assert.equal(s.title, 'Für Elise');
+  assert.deepEqual([s.bpm, s.bpb, s.grid], [132, 3, 2]);
+  assert.deepEqual(s.notes, [{ t: 0, d: 240, m: 76, v: 70 }, { t: 240, d: 240, m: 75, v: 70 }, { t: 480, d: 240, m: 76, v: 70 }, { t: 720, d: 1440, m: 45, v: 60 }, { t: 720, d: 240, m: 71, v: 72 }]);
+  assert.deepEqual(s.pedal, [[720, 1440]]);
+  assert.deepEqual(s.loop, [0, 1440]);
+  assert.deepEqual(s.inst, { ...S.INSTRUMENT, hard: -0.4, humanOn: 0 });
+  assert.equal(S.reverbSpace(s.fx), 'hall');
+  assert.equal(s.fx.dlyTime, '8t');
+});
+
+test('a link made as deflated JSON still loads', async () => {
+  const s = await S.decodeSong('zJYpBCsMwEAP_orNYZGdjnP1EH2B8KYESCKGHUgqlfy9OGASDmC_eiES8ELjtK4g7YhHxQDTn1IkD0USvYhHrZdnF4kxSJ55nsJThO0LEdj5p0IkPoiXKUqFszGeKqCsom2bKcqas9t8f');
+  assert.equal(s.title, 'Old');
+  assert.deepEqual(s.notes, [{ t: 0, d: 480, m: 60, v: 80 }, { t: 480, d: 240, m: 64, v: 100 }]);
+  assert.deepEqual(s.pedal, [[0, 960]]);
+});
+
+test('a broken binary link is refused', async () => {
+  const link = await S.encodeSong(sample());
+  for (const bad of ['x', 'xAAAA', link.slice(0, 12), 'x' + '_'.repeat(40)]) await assert.rejects(S.decodeSong(bad));
+});
+
+test('the demos fit in short links', async () => {
+  // as packed JSON and deflate, the twelve demos took 4862 characters
+  let total = 0;
+  for (const d of DEMOS) {
+    const s = d.make(), link = await S.encodeSong(s);
+    assert.deepEqual(await S.decodeSong(link), s, d.name);
+    total += link.length;
+  }
+  assert.ok(total < 2100, `${total} characters for the demos`);
 });
 
 test('a link made with the first version of the format still loads', () => {

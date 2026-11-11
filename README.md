@@ -103,7 +103,7 @@ The string engine, the soundboard, the player, the song format, the demos, MIDI 
 node --test "test/*.test.mjs"
 ```
 
-The link format: `#z…` is the song as JSON, deflated and base64url-encoded. Notes are one flat list (start after the note before, length, key, velocity; 480 ticks to a quarter note). Settings are lists by position: a new setting goes at the end, a retired one keeps its place.
+The link format: `#x…` is the song as bytes, compressed with LZMA ([js/lzma.js](js/lzma.js): no header, no end marker, no literal context) and base64url-encoded. The bytes are laid out for LZMA ([js/song.js](js/song.js)): the title, the settings that differ from a new song's, then the notes in columns (starts after the note before, lengths, keys, velocities) and the pedal. Times are counted in the largest step that divides them all (480 ticks to a quarter note); numbers longer than a byte are stored as byte planes, high bytes first. Settings are by position: a new setting goes at the end, a retired one keeps its place. Against the earlier format (`#z…`, the song as JSON, deflated; such links still load) the twelve demos take 58 % fewer characters as written (2034 against 4862) and 41 % fewer as played with Humanize (5860 against 10000). Tried and not used: pitch and velocity as steps from the note before, chords as intervals, a count of notes for each start: each made the links longer.
 
 ## License
 
