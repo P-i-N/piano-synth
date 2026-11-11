@@ -1,5 +1,5 @@
 // Small signal-analysis helpers for the offline engine tests (after vibetar's test/util.mjs).
-import { PianoEngine, keyHz, mulberry32 } from '../js/worklet.js';
+import { PianoEngine, PIANO, keyHz, mulberry32 } from '../js/worklet.js';
 
 export const FS = 48000;
 export { keyHz };
@@ -76,6 +76,14 @@ export function engine(cfg = {}, fs = FS, seed = 1) {
   e.configure(cfg);
   return e;
 }
+// PIANO.vary with every amount 0
+export const noVariation = () => ({ ...Object.fromEntries(Object.keys(PIANO.vary).map((k) => [k, 0])), feltNoiseHz: PIANO.vary.feltNoiseHz });
+// run with no variation from strike to strike: the piano as fitted
+export function steady(fn) {
+  const keep = PIANO.vary;
+  PIANO.vary = noVariation();
+  try { return fn(); } finally { PIANO.vary = keep; }
+}
 // the sum of the six channels
 export function render(e, secs, fs = FS) {
   const n = Math.floor((secs * fs) / 128) * 128, out = new Float32Array(n);
@@ -143,8 +151,8 @@ export function throughBoard(e, secs, board = cachedBoard(), fs = FS) {
   return { L: out[0], R: out[1] };
 }
 // one note as the two microphones hear it: { L, R }
-export function heardStereo(m, v = 0.5, secs = 2.5, hold = 0) {
-  const e = engine();
+export function heardStereo(m, v = 0.5, secs = 2.5, hold = 0, seed = 1) {
+  const e = engine({}, FS, seed);
   e.post({ type: 'n', t: 0.01, m, v });
   if (hold) e.post({ type: 'o', t: 0.01 + hold, m });
   const { L, R } = throughBoard(e, secs);

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { plateModes, buildBoard, BOARD, CHAIN, chainGain } from '../js/board/model.js';
 import { facts, vFor } from '../tools/notes.mjs';
-import { FS, aLevel, cachedBoard, heardStereo, both } from './util.mjs';
+import { FS, aLevel, cachedBoard, heardStereo, both, steady } from './util.mjs';
 
 test('the board resonates where a concert grand\'s does, as densely as measured boards', () => {
   const modes = plateModes();
@@ -51,11 +51,21 @@ test('through the board no key stands far out from its neighbours', () => {
 test('the loud notes are balanced along the keyboard as recorded', () => {
   // level of the ff notes of a Steinway B against its C4 (University of Iowa; 2026-11-10)
   const RECORDED = { 24: -5.6, 36: -6.4, 48: -2.2, 72: 1.9, 84: -6.3, 96: -8.9, 108: -21.6 };
-  const level = (m) => both(heardStereo(m, vFor(4), 3), (x) => facts(x, m, false).level), c4 = level(60);
+  // the piano as fitted, with no variation from strike to strike
+  const level = (m) => steady(() => both(heardStereo(m, vFor(4), 3), (x) => facts(x, m, false).level)), c4 = level(60);
   for (const m of Object.keys(RECORDED).map(Number)) {
     const got = level(m) - c4;
     assert.ok(Math.abs(got - RECORDED[m]) < 3, `key ${m}: ${got.toFixed(1)} dB against C4, recorded ${RECORDED[m]}`);
   }
+});
+
+test('on average the variation leaves the loud top key as loud as without it', () => {
+  // at C8 the knock is as loud as the note: its noise adds to the note's level
+  const level = (seed) => both(heardStereo(108, vFor(4), 1, 0, seed), (x) => facts(x, 108, false).level);
+  let sum = 0;
+  for (let k = 1; k <= 8; k++) sum += level(k);
+  const shift = sum / 8 - steady(() => level(1));
+  assert.ok(Math.abs(shift) < 1, `${shift.toFixed(2)} dB`);
 });
 
 // How long a response rings in a band: milliseconds until what is still to come has fallen

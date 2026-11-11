@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PIANO, STRETCH, inharmonicity, keyHz, hammerSpeed } from '../js/worklet.js';
 import { modelNote, toneGain, modelCurve } from '../tools/notes.mjs';
-import { FS, spectrum, bandEnergy, freqNear, db, cents, rms, peak, engine, render, note, decayRate } from './util.mjs';
+import { FS, spectrum, bandEnergy, freqNear, db, cents, rms, peak, engine, render, note, decayRate, noVariation } from './util.mjs';
 
 // run with some PIANO values changed (they are read when an engine is built)
 function withPiano(values, fn) {
@@ -233,8 +233,6 @@ test('the engine renders seven channels (six places on the bridge, and the knock
 });
 
 // ---- no two strikes the same ------------------------------------------------------------
-// PIANO.vary with every amount 0
-const noVariation = () => ({ ...Object.fromEntries(Object.keys(PIANO.vary).map((k) => [k, 0])), feltNoiseHz: PIANO.vary.feltNoiseHz });
 
 test('no two strikes are the same; the same seed gives the same strike', () => {
   const strike = (seed) => { const e = engine({}, FS, seed); e.post({ type: 'n', t: 0.01, m: 60, v: 0.5 }); return render(e, 0.3); };

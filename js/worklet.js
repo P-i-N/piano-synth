@@ -205,7 +205,7 @@ const PIANO = {
   // in recorded high notes (C6 to C8, soft to loud), with its noise (vary.knockNoise).
   // A key coming up and the pedal going down or up are softer pushes; the dampers leaving
   // the strings make them whisper for a moment. Those three are estimates.
-  knock: 1.9, knockGrow: 1.1, knockMs: 6, keyUp: 0.27, pedalThump: 0.81, damperHiss: 0.3,
+  knock: 2.1, knockGrow: 1.1, knockMs: 6, keyUp: 0.3, pedalThump: 0.9, damperHiss: 0.3,
   uneven: 0.06,       // and the hammer does not strike them equally hard
   // NO TWO STRIKES THE SAME. Each strike draws, evenly within +- these shares: the hammer's
   // speed, the felt's stiffness, the share of the blow each string takes, the knock's size and
@@ -215,7 +215,7 @@ const PIANO = {
   // a soft note is then as bright as a loud one.) knockNoise: noise in the knock against its
   // push and pull.
   // Estimates set by ear: the recordings have one take of each note and strength.
-  vary: { speed: 0.03, felt: 0.05, share: 0.06, lag: 30e-6, feltNoise: 0.1, feltNoiseHz: 500, knock: 0.2, knockLen: 0.2, knockNoise: 1 },
+  vary: { speed: 0.03, felt: 0.05, share: 0.06, lag: 30e-6, feltNoise: 0.1, feltNoiseHz: 500, knock: 0.2, knockLen: 0.2, knockNoise: 0.5 },
 };
 const REF = 5e-4;     // the compression (m) at which feltF is given
 
