@@ -211,9 +211,11 @@ const PIANO = {
   // speed, the felt's stiffness, the share of the blow each string takes, the knock's size and
   // length. lag: up to this many seconds between the first and the last string the hammer
   // meets. While the felt is on the strings its stiffness has noise of +- feltNoise, below
-  // feltNoiseHz. knockNoise: noise in the knock against its push and pull.
+  // feltNoiseHz. (Above about 1 kHz, even +-3 % adds highs that do not grow with the blow:
+  // a soft note is then as bright as a loud one.) knockNoise: noise in the knock against its
+  // push and pull.
   // Estimates set by ear: the recordings have one take of each note and strength.
-  vary: { speed: 0.03, felt: 0.05, share: 0.06, lag: 30e-6, feltNoise: 0.1, feltNoiseHz: 3000, knock: 0.2, knockLen: 0.2, knockNoise: 1 },
+  vary: { speed: 0.03, felt: 0.05, share: 0.06, lag: 30e-6, feltNoise: 0.1, feltNoiseHz: 500, knock: 0.2, knockLen: 0.2, knockNoise: 1 },
 };
 const REF = 5e-4;     // the compression (m) at which feltF is given
 
@@ -369,6 +371,7 @@ class Voice {
     let sum = 0, first = Infinity;
     for (const s of this.strings) { s.share = s.share0 * (1 + vary.share * u()); sum += s.share; s.lag = Math.round(rnd() * vary.lag * this.fs); first = Math.min(first, s.lag); }
     for (const s of this.strings) { s.share *= this.n / sum; s.lag -= first; }
+    this.rnd = rnd; this.fn = 0; this.fnA = Math.exp((-TAU * vary.feltNoiseHz) / this.fs);
     this.contact = true;
     this.keyDown = true; this.dropped = false;
     this.dg = this.dgT = 1;                            // the damper is up before the hammer arrives
@@ -397,7 +400,9 @@ class Voice {
       vin += b[(w - s.ha) & m] - b[(w - s.hb) & m];
     }
     vin /= n;
-    const K = this.hK * this.hard, p = this.hP, A = 1 + this.hA, Bc = this.hA * this.hu;
+    // the felt's noise: white noise through a one-pole lowpass, within +-1
+    this.fn = this.fnA * this.fn + (1 - this.fnA) * (2 * this.rnd() - 1);
+    const K = this.hK * this.hard * (1 + PIANO.vary.feltNoise * this.fn), p = this.hP, A = 1 + this.hA, Bc = this.hA * this.hu;
     const xi0 = this.hy + this.hv * T - this.sy - vin * T;   // compression if there were no force
     const c = (T * T) / this.hM + T / (2 * this.zs);         // how far a force opens the gap in one sample
     let F = 0;

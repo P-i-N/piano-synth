@@ -258,3 +258,19 @@ test('the detuning of a key does not depend on the strike', () => {
   const pitches = (seed) => engine({}, FS, seed).voices[60].strings.map((s) => s.f);
   assert.deepEqual(pitches(1), pitches(2));
 });
+
+// one strike of key m at velocity v with the given seed, the knocks off
+const strikeOf = (m, v, seed, secs = 0.2) => { const e = engine({ noise: 0 }, FS, seed); e.post({ type: 'n', t: 0.01, m, v }); return render(e, secs); };
+
+test('with no variation, the random source changes nothing', () => {
+  withPiano({ vary: noVariation() }, () => assert.deepEqual(strikeOf(72, 0.7, 1), strikeOf(72, 0.7, 2)));
+});
+
+test('the felt has noise while it is on the strings', () => {
+  const felt = { ...noVariation(), feltNoise: PIANO.vary.feltNoise };
+  withPiano({ vary: felt }, () => assert.notDeepEqual(strikeOf(72, 0.7, 1), strikeOf(72, 0.7, 2)));
+});
+
+test('the top key at full strength stays finite with the felt noise', () => {
+  for (const seed of [1, 2, 3]) assert.ok(strikeOf(108, 1, seed).every(Number.isFinite), `seed ${seed}`);
+});
