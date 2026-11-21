@@ -3,6 +3,7 @@
 
 import { AudioEngine, renderSong, wavBlob } from './audio.js';
 import { parseMidi, midiToSong, songToMidi } from './midi.js';
+import { createMidiHub, createMidiRecorder } from './webmidi.js';
 import * as S from './song.js';
 import { createRoll } from './roll.js';
 import { createKeys } from './keys.js';
@@ -18,6 +19,7 @@ const el = (tag, cls, text) => {
 };
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const STORE_KEY = 'piano-synth.song';
+const MIDI_KEY = 'piano-synth.midi';
 
 const audio = new AudioEngine();
 let song = S.newSong();
@@ -103,8 +105,8 @@ const roll = createRoll($('roll'), {
   loop: (region) => { if (region && !player.loop) toggleLoop(); },
 });
 const keys = createKeys($('keysCanvas'), {
-  down: async (m, v) => { keys.down(m, v); await audio.init(); audio.send([{ type: 'n', t: audio.time + 0.005, m, v }]); },
-  up: async (m) => { keys.up(m); await audio.init(); audio.send([{ type: 'o', t: audio.time + 0.005, m }]); },
+  down: async (m, v) => { keys.down(m, v); midi.send([{ type: 'n', m, v }]); await audio.init(); audio.send([{ type: 'n', t: audio.time + 0.005, m, v }]); },
+  up: async (m) => { keys.up(m); midi.send([{ type: 'o', m }]); await audio.init(); audio.send([{ type: 'o', t: audio.time + 0.005, m }]); },
 });
 
 // while nothing plays, the keyboard shows the notes under the pointer (or at the cursor)
@@ -119,7 +121,8 @@ function showOnKeys() {
 function updateStatus() {
   const t = hoverTick != null ? hoverTick : roll.cursor, bar = S.barTicks(song);
   const n = song.notes.length;
-  $('status').textContent = `Bar ${Math.floor(t / bar) + 1} · beat ${Math.floor((t % bar) / S.PPQ) + 1} · ${n} note${n === 1 ? '' : 's'}`;
+  const extra = rec.active ? ' · Recording' : rec.armed ? ' · Armed (play a MIDI key)' : '';
+  $('status').textContent = `Bar ${Math.floor(t / bar) + 1} · beat ${Math.floor((t % bar) / S.PPQ) + 1} · ${n} note${n === 1 ? '' : 's'}${extra}`;
 }
 
 // What the keys and the pedal do: as written, or as the player plays it (the same
@@ -131,10 +134,10 @@ function performance_() {
 
 // notes, pedal or loop changed
 function changed() {
-  if (player.playing) player.list = performance_();
+  if (player.playing && !rec.active) player.list = performance_();
   keysStale = true;
   updateStatus();
-  scheduleSave();
+  if (!rec.active) scheduleSave();
 }
 
 // ---- audio preview -----------------------------------------------------------
@@ -144,10 +147,12 @@ async function preview(m, vel) {
   if (player.playing) return;
   await audio.init();
   const t = audio.time + 0.01;
-  audio.send([{ type: 'n', t, m, v: vel / 127 }, { type: 'o', t: t + 0.4, m }]);
+  const evs = [{ type: 'n', t, m, v: vel / 127 }, { type: 'o', t: t + 0.4, m }];
+  audio.send(evs);
+  midi.send(evs, audio.time, performance.now());
 }
 
-// ---- transport ---------------------------------------------------------------
+// ---- transport & live MIDI recording -----------------------------------------
 
 // The audio context, and the soundboard (about a second to build, the first time in this browser).
 async function ready() {
@@ -160,38 +165,114 @@ async function ready() {
 }
 
 // tick `baseTick` sounds at audio time `baseTime`; events are sent up to tick `tick`
-const player = { playing: false, loop: false, list: [], tick: 0, end: 0, baseTick: 0, baseTime: 0, k: 0, timer: 0, queue: [], segs: [], ended: false, endTime: 0 };
+const player = { playing: false, loop: false, list: [], tick: 0, end: 0, baseTick: 0, baseTime: 0, k: 0, timer: 0, queue: [], segs: [], ended: false, endTime: Infinity };
+let recStartedPlay = false;
+
+const rec = createMidiRecorder({
+  before(s) {
+    const wasEmpty = s.notes.length === 0;
+    pushUndo();
+    // a live performance played by a person is not humanized again
+    if (wasEmpty && s.inst.humanOn !== 0) { s.inst.humanOn = 0; syncSongControls(); }
+  },
+  change(done) {
+    roll.refresh();
+    keysStale = true;
+    updateStatus();
+    if (done) {
+      if (player.playing) player.list = performance_();
+      scheduleSave();
+    }
+  },
+});
+
+function syncRecUi() {
+  const b = $('rec');
+  b.setAttribute('aria-pressed', rec.active ? 'true' : 'false');
+  if (rec.armed) b.dataset.state = 'armed'; else delete b.dataset.state;
+  updateStatus();
+}
+
+function heardTick() {
+  if (!player.playing || !audio.running || !player.segs.length) return roll.cursor;
+  const now = audio.time - audio.latency;
+  let seg = player.segs[0];
+  for (let i = 1; i < player.segs.length && player.segs[i].time <= now; i++) seg = player.segs[i];
+  return Math.max(seg.tick, seg.tick + (now - seg.time) / player.k);
+}
 
 function playRange() {
   if (player.loop && song.loop) return song.loop;
+  if (rec.active) return player.loop ? [0, S.songTicks(song)] : [0, Infinity];
   return [0, S.songEnd(song)];
 }
 
 // ticks by which a humanized note may come before its written place (40 ms)
 const lead = () => (S.humanOf(song.inst) > 0 ? 0.04 / S.tickSecs(song) : 0);
 
-async function play(fromTop) {
-  await ready();
-  if (player.playing) stop(true);
+function beginTransport(fromTop, immediate) {
   const [from, to] = playRange();
-  if (to <= from) { toast('Nothing to play yet — click in the roll to draw a note'); return; }
   let start = fromTop ? 0 : roll.cursor;
   if (start < from || start >= to) start = from;
   player.seed = (Math.random() * 0x7fffffff) | 0;
   // the player may strike a note a moment before it is written: start that much earlier
-  start -= lead();
-  Object.assign(player, { playing: true, list: performance_(), tick: start, baseTick: start, baseTime: audio.time + 0.08, k: S.tickSecs(song), queue: [], segs: [], ended: false, endTime: Infinity });
-  player.segs.push({ time: player.baseTime, tick: start });
+  const pre = immediate ? 0 : lead();
+  start -= pre;
+  const t0 = audio.time + (immediate ? 0 : 0.08);
+  Object.assign(player, { playing: true, list: performance_(), tick: start, baseTick: start, baseTime: t0, k: S.tickSecs(song), queue: [], segs: [], ended: false, endTime: Infinity });
+  player.segs.push({ time: t0, tick: start });
   keys.show([]);
-  if (S.pedalAt(song, start)) sendAt([{ type: 'p', t: player.baseTime, v: 1 }]);
+  if (S.pedalAt(song, start)) sendAt([{ type: 'p', t: t0, v: 1 }]);
   $('play').classList.add('on'); $('playIco').textContent = '■'; $('playLbl').textContent = 'Stop';
   schedule();
   player.timer = setInterval(schedule, 25);
+  return start + pre;
 }
 
-// to the engine, and to the keyboard when the time comes
+async function play(fromTop) {
+  await ready();
+  const wasArmed = rec.armed;
+  if (player.playing) stop(true);
+  if (wasArmed) { rec.start(); recStartedPlay = true; syncRecUi(); }
+  const [from, to] = playRange();
+  if (to <= from) { toast('Nothing to play yet — click in the roll to draw a note'); return; }
+  beginTransport(fromTop, false);
+}
+
+async function toggleRec() {
+  if (rec.active) {
+    const t = heardTick();
+    rec.stop(song, t);
+    syncRecUi();
+    if (recStartedPlay) stop();
+    return;
+  }
+  if (rec.armed) {
+    rec.disarm();
+    recStartedPlay = false;
+    syncRecUi();
+    return;
+  }
+  if (!(await ensureMidi(true))) return;
+  await ready();
+  if (player.playing) {
+    recStartedPlay = false;
+    rec.start();
+    syncRecUi();
+    toast('Recording — press R or Space to finish');
+  } else {
+    recStartedPlay = true;
+    rec.arm();
+    syncRecUi();
+    toast('Armed — play your MIDI keyboard to start recording');
+  }
+}
+
+// to the engine, to MIDI out (if chosen), and to the keyboard when the time comes
 function sendAt(events) {
+  if (!events.length) return;
   audio.send(events);
+  midi.send(events, audio.time, performance.now());
   for (const ev of events) player.queue.push(ev);
 }
 
@@ -216,6 +297,10 @@ function schedule() {
     if (!player.loop) { player.ended = true; player.endTime = tEnd; break; }
     // round again: every key and the pedal come up, and the range starts over
     sendAt([{ type: 'O', t: tEnd }]);
+    if (rec.active) {
+      player.queue.push({ type: 'wrap', t: tEnd, end: to, start: from });
+      player.list = performance_();
+    }
     const back = lead();
     player.baseTime = tEnd - back * k; player.baseTick = from - back; player.tick = from - back;
     player.segs.push({ time: tEnd, tick: from });
@@ -224,8 +309,15 @@ function schedule() {
 }
 
 function stopUi() {
+  const endTick = heardTick();
   clearInterval(player.timer);
   player.playing = false; player.queue = []; player.segs = [];
+  if (rec.active || rec.armed) {
+    const did = rec.stop(song, endTick);
+    if (did && endTick > 0) roll.setCursor(Math.round(endTick / S.gridTicks(song)) * S.gridTicks(song));
+  }
+  recStartedPlay = false;
+  syncRecUi();
   $('play').classList.remove('on'); $('playIco').textContent = '▶'; $('playLbl').textContent = 'Play';
   roll.setPlayhead(-1);
   keys.clear();
@@ -233,14 +325,18 @@ function stopUi() {
 }
 
 function stop(silent) {
-  if (!player.playing) return;
+  if (!player.playing) {
+    if (rec.armed) { rec.disarm(); recStartedPlay = false; syncRecUi(); }
+    return;
+  }
   stopUi();
+  midi.hushOut();
   if (silent) audio.flush(); else audio.hush();
 }
 
 function toggleLoop() {
   player.loop = !player.loop;
-  if (player.playing) player.list = performance_();
+  if (player.playing && !rec.active) player.list = performance_();
   $('loop').setAttribute('aria-pressed', player.loop);
 }
 
@@ -257,11 +353,16 @@ function frame() {
       else if (ev.type === 'o') keys.up(ev.m);
       else if (ev.type === 'p') keys.pedal(ev.v > 0);
       else if (ev.type === 'O') keys.clear();
+      else if (ev.type === 'wrap') rec.wrapLoop(song, ev.end, ev.start);
     }
     if (i) player.queue.splice(0, i);
     while (player.segs.length > 1 && player.segs[1].time <= now) player.segs.shift();
     const seg = player.segs[0];
-    if (seg) roll.setPlayhead(Math.max(seg.tick, seg.tick + (now - seg.time) / player.k));
+    if (seg) {
+      const tickNow = Math.max(seg.tick, seg.tick + (now - seg.time) / player.k);
+      roll.setPlayhead(tickNow);
+      if (rec.active && rec.advance(tickNow)) roll.refresh();
+    }
     // the last notes ring out
     if (player.ended && audio.time >= player.endTime) stopUi();
   }
@@ -279,6 +380,134 @@ function frame() {
     const x = clamp((db + 48) / 48, 0, 1) * (w - 8);
     g.fillStyle = db > -1.5 ? '#e2733c' : '#7dd3a8';
     g.fillRect(4, 8, x, 6);
+  }
+}
+
+// ---- WebMIDI -----------------------------------------------------------------
+
+let midiFlash = 0, suspendWarned = false;
+const knownMidiIn = new Set();
+
+const midi = createMidiHub({
+  event(ev) {
+    const badge = $('midiState');
+    badge.dataset.active = '1';
+    clearTimeout(midiFlash);
+    midiFlash = setTimeout(() => delete badge.dataset.active, 140);
+
+    if (ev.type === 'n') keys.down(ev.m, ev.v);
+    else if (ev.type === 'o') keys.up(ev.m);
+    else if (ev.type === 'p') keys.pedal(ev.v > 0);
+    else if (ev.type === 'R') keys.clear();
+
+    if (rec.armed && !player.playing && (ev.type === 'n' || (ev.type === 'p' && ev.v > 0))) {
+      if (audio.running) {
+        rec.start();
+        syncRecUi();
+        rec.event(song, ev, beginTransport(false, true));
+      } else {
+        ready().then(() => {
+          if (!rec.armed || player.playing) return;
+          rec.start();
+          syncRecUi();
+          rec.event(song, ev, beginTransport(false, true));
+        });
+      }
+    } else if (rec.active) {
+      rec.event(song, ev, heardTick());
+    }
+
+    if (audio.running) {
+      if (audio.ctx && audio.ctx.state === 'suspended') {
+        audio.ctx.resume();
+        if (!suspendWarned) { suspendWarned = true; toast('Click anywhere on the page once to enable audio for MIDI'); }
+      }
+      audio.send([ev]);
+    } else {
+      audio.init().then(() => {
+        if (audio.ctx && audio.ctx.state === 'suspended' && !suspendWarned) {
+          suspendWarned = true;
+          toast('Click anywhere on the page once to enable audio for MIDI');
+        }
+        audio.send([ev]);
+      });
+    }
+  },
+  ports({ inputs, outputs }, changedPort) {
+    if (changedPort && changedPort.type === 'input') {
+      if (changedPort.state === 'connected' && !knownMidiIn.has(changedPort.id)) {
+        knownMidiIn.add(changedPort.id);
+        toast(`MIDI connected: ${changedPort.name || 'Keyboard'}`);
+      } else if (changedPort.state === 'disconnected') {
+        knownMidiIn.delete(changedPort.id);
+      }
+    } else {
+      knownMidiIn.clear();
+      for (const p of inputs) knownMidiIn.add(p.id);
+    }
+    syncMidiControls(inputs, outputs);
+  },
+});
+
+function saveMidiPrefs() {
+  try {
+    localStorage.setItem(MIDI_KEY, JSON.stringify({ inputId: midi.inputId, channel: midi.channel, outputId: midi.outputId }));
+  } catch (e) { /* ignore */ }
+}
+
+function syncMidiControls(inputs = midi.ports().inputs, outputs = midi.ports().outputs) {
+  const supported = typeof navigator !== 'undefined' && typeof navigator.requestMIDIAccess === 'function';
+  const inSel = $('midiIn'), chSel = $('midiCh'), outSel = $('midiOut'), badge = $('midiState');
+  inSel.innerHTML = '';
+  inSel.append(new Option(inputs.length ? `All inputs (${inputs.length})` : 'All inputs', 'all'));
+  for (const p of inputs) inSel.append(new Option(p.name, p.id));
+  inSel.append(new Option('Off', 'off'));
+  if (midi.inputId !== 'all' && midi.inputId !== 'off' && !inputs.some((p) => p.id === midi.inputId)) midi.setInput('all');
+  inSel.value = midi.inputId;
+
+  outSel.innerHTML = '';
+  outSel.append(new Option('Off', 'off'));
+  for (const p of outputs) outSel.append(new Option(p.name, p.id));
+  if (midi.outputId !== 'off' && !outputs.some((p) => p.id === midi.outputId)) midi.setOutput('off');
+  outSel.value = midi.outputId;
+
+  chSel.value = String(midi.channel);
+  inSel.disabled = chSel.disabled = outSel.disabled = !supported;
+
+  if (!supported) {
+    badge.textContent = 'Unsupported';
+    badge.dataset.state = 'off';
+  } else if (!midi.connected) {
+    badge.textContent = 'Connect';
+    badge.dataset.state = 'off';
+  } else if (midi.inputId === 'off' && midi.outputId === 'off') {
+    badge.textContent = 'Off';
+    badge.dataset.state = 'off';
+  } else if (!inputs.length && midi.outputId === 'off') {
+    badge.textContent = 'No device';
+    badge.dataset.state = 'idle';
+  } else {
+    const chosen = midi.inputId !== 'all' && midi.inputId !== 'off' ? inputs.find((p) => p.id === midi.inputId) : null;
+    badge.textContent = chosen ? chosen.name : inputs.length === 1 ? inputs[0].name : inputs.length ? `${inputs.length} inputs` : 'Out ready';
+    badge.dataset.state = 'ready';
+  }
+}
+
+async function ensureMidi(loud) {
+  if (typeof navigator === 'undefined' || typeof navigator.requestMIDIAccess !== 'function') {
+    if (loud) toast('WebMIDI is not supported in this browser');
+    syncMidiControls();
+    return false;
+  }
+  if (midi.connected) return true;
+  try {
+    await midi.connect();
+    syncMidiControls();
+    return true;
+  } catch (e) {
+    syncMidiControls();
+    if (loud) toast('MIDI access was blocked by the browser');
+    return false;
   }
 }
 
@@ -318,13 +547,29 @@ function buildSettings() {
   mkSlider($('instSliders'), ...inst('hard'), 'Hammer felt', -1, 1, 0.02, signed).title = 'Softer or harder hammer felt: a harder felt gives a brighter note';
   mkSlider($('instSliders'), ...inst('noise'), 'Action noise', 0, 1, 0.01, pct).title = 'The knock of key and hammer, keys coming up, the pedal';
 
-  humanRow = mkSlider($('playerSliders'), () => song.inst.human, (v) => { song.inst.human = v; if (player.playing) player.list = performance_(); }, 'Humanize', 0, 1, 0.01, pct);
+  humanRow = mkSlider($('playerSliders'), () => song.inst.human, (v) => { song.inst.human = v; if (player.playing && !rec.active) player.list = performance_(); }, 'Humanize', 0, 1, 0.01, pct);
   $('humanOn').addEventListener('change', (e) => {
     song.inst.humanOn = e.target.checked ? 1 : 0;
     e.target.blur();
-    if (player.playing) player.list = performance_();
+    if (player.playing && !rec.active) player.list = performance_();
     syncSongControls(); scheduleSave();
   });
+
+  $('midiCh').append(new Option('All', '-1'));
+  for (let c = 0; c < 16; c++) $('midiCh').append(new Option(String(c + 1), String(c)));
+  try {
+    const mp = JSON.parse(localStorage.getItem(MIDI_KEY) || 'null');
+    if (mp && typeof mp === 'object') {
+      if (mp.inputId) midi.setInput(mp.inputId);
+      if (mp.channel != null) midi.setChannel(mp.channel);
+      if (mp.outputId) midi.setOutput(mp.outputId);
+    }
+  } catch (e) { /* ignore */ }
+  syncMidiControls();
+  $('midiIn').addEventListener('change', async (e) => { midi.setInput(e.target.value); saveMidiPrefs(); if (e.target.value !== 'off') await ensureMidi(true); else syncMidiControls(); });
+  $('midiCh').addEventListener('change', (e) => { midi.setChannel(+e.target.value); saveMidiPrefs(); });
+  $('midiOut').addEventListener('change', async (e) => { midi.setOutput(e.target.value); saveMidiPrefs(); if (e.target.value !== 'off') await ensureMidi(true); else syncMidiControls(); });
+  $('midiSec').addEventListener('pointerdown', () => { if (!midi.connected) ensureMidi(false); });
 
   const fx = (k, slow) => [() => song.fx[k], (v) => { song.fx[k] = v; syncFxControls(); fxChanged(slow); }];
   for (const [k, r] of Object.entries(S.REVERBS)) $('revSpace').append(new Option(r.name, k));
@@ -415,12 +660,13 @@ function handleKey(key, e) {
     case 'Home': roll.setCursor(0); return true;
     case ' ': player.playing ? stop() : play(false); return true;
     case 'Enter': play(true); return true;
-    case 'Escape': if (roll.selected.length) roll.clearSelection(); else if (player.playing) stop(); return true;
+    case 'Escape': if (roll.selected.length) roll.clearSelection(); else if (player.playing || rec.armed) stop(); return true;
     case '+': case '=': roll.zoom(1.25); return true;
     case '-': case '_': roll.zoom(0.8); return true;
     case '?': $('help').showModal(); return true;
   }
   if (key.toLowerCase() === 'l') { toggleLoop(); return true; }
+  if (key.toLowerCase() === 'r') { toggleRec(); return true; }
   return false;
 }
 
@@ -443,6 +689,7 @@ function bindInput() {
   });
 
   $('play').addEventListener('click', () => (player.playing ? stop() : play(false)));
+  $('rec').addEventListener('click', toggleRec);
   $('loop').addEventListener('click', toggleLoop);
   $('share').addEventListener('click', share);
   $('zoomIn').addEventListener('click', () => roll.zoom(1.25));
@@ -558,8 +805,17 @@ async function boot() {
     } catch (e) { /* ignore */ }
   }
   if (!ok) { setSong(DEMOS[0].make()); toast('Press Play to hear the demo — there are more under Demos', 5000); }
+  // a user gesture unlocks audio so a connected MIDI keyboard can sound immediately
+  const unlock = () => {
+    if (audio.ctx && audio.ctx.state === 'running') return;
+    if (midi.connected && midi.ports().inputs.length) audio.init();
+  };
+  window.addEventListener('pointerdown', unlock, { passive: true });
+  window.addEventListener('keydown', unlock, { passive: true });
+
+  ensureMidi(false);
   requestAnimationFrame(frame);
   // debugging / scripting hook
-  window.pianoSynth = { audio, get song() { return song; }, S, player, roll, keys };
+  window.pianoSynth = { audio, midi, rec, get song() { return song; }, S, player, roll, keys };
 }
 boot();

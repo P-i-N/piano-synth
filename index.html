@@ -18,6 +18,7 @@
   <input id="title" class="title" type="text" maxlength="80" spellcheck="false" aria-label="Song title" placeholder="Song title">
   <div class="transport">
     <button id="play" class="btn primary" title="Play / stop (Space)"><span class="ico" id="playIco">▶</span><span id="playLbl">Play</span></button>
+    <button id="rec" class="btn toggle rec" title="Record from a MIDI keyboard (R)" aria-pressed="false"><span class="dot"></span><span>Rec</span></button>
     <button id="loop" class="btn toggle" title="Loop (L): the region dragged in the bar ruler, or the whole song" aria-pressed="false">Loop</button>
     <label class="field bpm" title="Tempo">
       <input id="bpm" type="number" min="30" max="300" step="1" inputmode="numeric" aria-label="Tempo in BPM"><span>bpm</span>
@@ -67,6 +68,12 @@
       <summary>Player</summary>
       <div id="playerSliders" class="sliders"></div>
     </details>
+    <details id="midiSec" open>
+      <summary>MIDI <span class="midibadge" id="midiState" data-state="off">Off</span></summary>
+      <div class="row"><span class="lbl">Input</span><select id="midiIn" aria-label="MIDI input"></select></div>
+      <div class="row"><span class="lbl">Channel</span><select id="midiCh" aria-label="MIDI channel"></select></div>
+      <div class="row"><span class="lbl">Output</span><select id="midiOut" aria-label="MIDI output"></select></div>
+    </details>
     <details open>
       <summary>Reverb <label class="switch"><input type="checkbox" id="revOn"><i></i></label></summary>
       <div class="row"><span class="lbl">Space</span><select id="revSpace" aria-label="Reverb space"></select></div>
@@ -107,13 +114,14 @@
     <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>X</kbd> <kbd>V</kbd> <kbd>A</kbd></td><td>Copy · cut · paste at the cursor · select all</td></tr>
     <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Undo / redo</td></tr>
     <tr><td><kbd>Space</kbd></td><td>Play from the cursor / stop · <kbd>Enter</kbd> plays from the top</td></tr>
-    <tr><td><kbd>L</kbd></td><td>Loop</td></tr>
+    <tr><td><kbd>R</kbd> · <kbd>L</kbd></td><td>Record from a MIDI keyboard · Loop</td></tr>
     <tr><td>Wheel</td><td>Scroll · <kbd>Shift</kbd> + wheel along the time · <kbd>Ctrl</kbd> + wheel or <kbd>+</kbd> <kbd>−</kbd> zoom</td></tr>
   </table>
   <p class="hint2">The <b>bar ruler</b> at the top: click sets the cursor, drag sets the loop region, double click removes it.</p>
   <p class="hint2">The <b>velocity lane</b>: drag across the stems to set how hard the notes are struck. With notes selected, only those change.</p>
   <p class="hint2">The <b>pedal lane</b>: drag to press the sustain pedal, right-drag (or <kbd>Shift</kbd> + drag) to lift it.</p>
   <p class="hint2">The <b>keyboard</b> shows the keys that sound: orange for a finger (stronger for a harder blow), green for strings held by the pedal alone. Click a key to play it; lower on the key is louder.</p>
+  <p class="hint2"><b>MIDI</b>: plug in a MIDI keyboard (and sustain pedal) to play live at any time, or press <b>Rec</b> (<kbd>R</kbd>) to record into the roll — recording waits for your first key when stopped, or punches in while playing. Input, channel and optional MIDI output are in the <b>MIDI</b> panel.</p>
   <p class="hint2"><b>Humanize</b> (next to the tempo) plays the notes like a person: two hands and their fingers (the fourth and fifth are weaker), a chord too wide for a hand is rolled, a line is played legato, the pedal goes down just after the keys; timing and loudness drift, a phrase moves on and eases off, the top note is brought out and comes a little early, and the song slows into its last note. The <b>Humanize</b> slider (Player panel) sets how much. Switched off, the notes are played exactly as written.</p>
   <p class="hint2"><b>Import MIDI</b> (menu, or drop a <code>.mid</code> file on the page) takes every track but the drums, with its sustain pedal. The song has one tempo: where the file changes tempo, the notes keep their place in time. A file that was played by a person is not humanized again. <b>Export MIDI</b> writes the notes as written; <b>Export WAV</b> renders what you hear.</p>
   <p class="hint2">Your song lives in the page address: copy it any time to share.</p>

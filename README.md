@@ -11,6 +11,7 @@ Draw notes, press play, copy the page address to share it: the whole song (notes
 - A piano roll on a canvas: draw, move and resize notes, select several, copy / paste, undo, snap to a grid, zoom and scroll
 - A velocity lane, a sustain-pedal lane, a loop region in the bar ruler, a playhead
 - A keyboard under the roll: it shows the keys that sound while the song plays (stronger colour for a harder blow, green for strings held by the pedal alone), the notes under the pointer while nothing plays, and plays a note when a key is clicked
+- **WebMIDI** ([js/webmidi.js](js/webmidi.js)): play live from a MIDI keyboard and sustain pedal, record notes and pedal straight into the roll (**Rec** / `R`, waiting for your first key when stopped or punching in while playing), and choose input, channel and optional MIDI output
 - **Humanize** (the switch next to the tempo, the amount in the Player panel): two hands and their fingers play the notes; timing and loudness drift, phrases breathe, the melody is brought out, the song slows into its last note. Off: the notes are played exactly as written
 - Convolution reverb with spaces from a small room to a cathedral, and tempo-synced ping-pong delay
 - MIDI file import (menu, or drop a `.mid` on the page): every track but the drums, with its sustain pedal ([js/midi.js](js/midi.js)). The song has one tempo: where the file changes tempo, the notes keep their place in time. A file that was played by a person is not humanized again
@@ -86,6 +87,7 @@ Reference recordings go into `ref/`, which is not committed: `ref/iowa/` holds 2
 | `Backspace` | Delete the selected notes |
 | `Ctrl+C/X/V/A`, `Ctrl+Z` | Clipboard, select all, undo |
 | `Space` / `Enter` | Play from the cursor / from the top |
+| `R` | Record from a MIDI keyboard |
 | `L` | Loop: the region dragged in the bar ruler, or the whole song |
 | Wheel | Scroll · `Shift` along the time · `Ctrl` or `+` `−` zoom |
 
