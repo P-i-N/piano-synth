@@ -51,9 +51,9 @@ test('the scale is the recorded piano\'s: stiffness of the strings and stretch o
 });
 
 test('strings are as stiff as the scale says: partials are stretched', () => {
-  // B from a few partials: f_k = k f1 sqrt((1 + B k²) / (1 + B))
-  for (const [m, ks] of [[36, [12, 16, 20]], [48, [8, 12, 16]], [60, [6, 8, 10]], [72, [4, 5, 6]]]) {
-    const x = withPiano({ detune: 0 }, () => note(m, 0.7, 1.2));
+  // B from a few partials: f_k = k f1 sqrt((1 + B k²) / (1 + B)), also high partials in the bass
+  for (const [m, ks] of [[21, [20, 40, 60]], [24, [20, 40, 60]], [36, [12, 16, 20]], [48, [8, 12, 16]], [60, [6, 8, 10]], [72, [4, 5, 6]]]) {
+    const x = withPiano({ detune: 0, long: 0 }, () => note(m, 0.7, 1.2));
     const f1 = freqNear(x, keyHz(m), 0.05, 1).f, want = inharmonicity(m), Bs = [];
     for (const k of ks) {
       const fk = k * keyHz(m) * Math.sqrt((1 + want * k * k) / (1 + want));
@@ -75,13 +75,13 @@ test('velocity changes the tone: a hard blow is brighter, not only louder', () =
 
 test('a harder blow is a shorter contact; the contact is shorter up the keyboard', () => {
   const contact = (m, v) => { const e = engine(); e.post({ type: 'n', t: 0.01, m, v }); render(e, 0.1); return (e.voices[m].contactFrames / FS) * 1000; };
-  for (const m of [36, 60, 84]) {
+  for (const m of [21, 24, 36, 60, 84]) {
     const soft = contact(m, 0.2), hard = contact(m, 0.9);
     assert.ok(hard < 0.92 * soft, `key ${m}: ${soft.toFixed(2)} ms soft, ${hard.toFixed(2)} ms hard`);
   }
-  const c2 = contact(36, 0.5), c4 = contact(60, 0.5), c6 = contact(84, 0.5);
+  const c1 = contact(24, 0.5), c2 = contact(36, 0.5), c4 = contact(60, 0.5), c6 = contact(84, 0.5);
   assert.ok(c4 > 1.5 && c4 < 3, `C4 at mf: ${c4.toFixed(2)} ms`);
-  assert.ok(c2 > c4 && c4 > c6, `${c2.toFixed(2)}, ${c4.toFixed(2)}, ${c6.toFixed(2)} ms`);
+  assert.ok(c1 > c2 && c2 > c4 && c4 > c6, `${c1.toFixed(2)}, ${c2.toFixed(2)}, ${c4.toFixed(2)}, ${c6.toFixed(2)} ms`);
 });
 
 test('a harder blow changes the tone as much as on a recorded piano', () => {
@@ -89,8 +89,8 @@ test('a harder blow changes the tone as much as on a recorded piano', () => {
   // from mf to ff: for each dB the note gets louder, the bands 2-4 kHz and 4-8 kHz gain this
   // many dB more than the band of the fundamental. (Per dB of level, because nobody knows
   // how hard "mf" and "ff" were played.) The model must be within 30 % under and 50 % over.
-  const RECORDED = { 36: [1.84], 48: [1.25, 1.76], 60: [1.21, 2.09], 72: [1.49, 1.94] };
-  for (const m of [36, 48, 60, 72]) {
+  const RECORDED = { 24: [1.84], 36: [1.84], 48: [1.25, 1.76], 60: [1.21, 2.09], 72: [1.49, 1.94] };
+  for (const m of [24, 36, 48, 60, 72]) {
     const g = toneGain(modelNote(m, 1.5), modelNote(m, 4), m);
     RECORDED[m].forEach((want, i) => {
       const got = g.bands[3 + i] / g.level;
@@ -312,4 +312,18 @@ test('the strings of a unison are not equally stiff: their beats do not grow in 
     if (most > 0.25) uneven++;
   }
   assert.ok(uneven >= 6, `beat per partial, 20th against 4th: ${lines.join(', ')}`);
+});
+
+test('bass strings pull along their length: longitudinal modes arrive before the transverse wave', () => {
+  // On C1 the transverse wave takes > 5 ms even for its fastest partials to reach the bridge;
+  // longitudinal compression is heard at once (noises off so the knock is not counted).
+  const on = note(24, 0.85, 0.4, 0, { noise: 0 });
+  const off = withPiano({ long: 0 }, () => note(24, 0.85, 0.4, 0, { noise: 0 }));
+  assert.ok(rms(on, 0.0105, 0.0145) > 1e-3 && rms(on, 0.0105, 0.0145) > 20 * rms(off, 0.0105, 0.0145), 'audible at the bridge in the first 4 ms');
+  // and the difference is the longitudinal modes, which grow with the square of the blow
+  const diff = (v) => {
+    const a = note(24, v, 0.5, 0, { noise: 0 }), b = withPiano({ long: 0 }, () => note(24, v, 0.5, 0, { noise: 0 }));
+    return db(rms(a.map((x, i) => x - b[i]), 0.02, 0.3)) - db(rms(b, 0.02, 0.3));
+  };
+  assert.ok(diff(0.9) - diff(0.3) > 8, `longitudinal share grows from ${diff(0.3).toFixed(1)} to ${diff(0.9).toFixed(1)} dB`);
 });

@@ -14,7 +14,7 @@
 //
 // Building takes a few seconds; it is done once, in a worker, and kept (see js/audio.js).
 
-export const MODEL_VERSION = 8;
+export const MODEL_VERSION = 9;
 
 // Lengths in metres. x runs along the keyboard from the bass side, y from the keyboard to
 // the tail, z up. Sources: Ege, Boutillon and Rebillat (2013) and Boutillon and Ege (2013) for
@@ -205,9 +205,13 @@ export function buildBoard(fs, P = BOARD) {
       const near = Math.min(Math.hypot(P.mics[0][0] - bx, P.mics[0][1] - by, P.mics[0][2]), Math.hypot(P.mics[1][0] - bx, P.mics[1][1] - by, P.mics[1][2]));
       const turn = (w / C) * near, tc = Math.cos(turn), ts = Math.sin(turn);
       for (let q = 0; q < 2; q++) {
-        // the microphone, and the lid's copy of it
+        // the microphone, and the lid's copy of it; below the resonance the plate is held by
+        // its stiffness, so its acceleration falls with f² (its power with f⁴)
         const a2 = amp * amp * (R[q][0] ** 2 + R[q][1] ** 2 + P.lid.reflect ** 2 * (R[q + 2][0] ** 2 + R[q + 2][1] ** 2)), out = power[2 * z + q];
-        for (let i = g0; i < grid.length && grid[i] < mode.f + 100 * half; i++) { const d = (grid[i] - mode.f) / half; out[i] += a2 / (1 + d * d) / (half * half); }
+        for (let i = g0; i < grid.length && grid[i] < mode.f + 100 * half; i++) {
+          const gf = grid[i], d = (gf - mode.f) / half, low = gf < mode.f ? (gf / mode.f) ** 4 : 1;
+          out[i] += (a2 * low) / (1 + d * d) / (half * half);
+        }
         // the same resonance with its true delays: amp x e^(-sigma t) x Re((re + j im) x j e^(j w t))
         if (z !== 2 || drive * drive < 1e-8) continue;
         const sr = R[q][0] + P.lid.reflect * R[q + 2][0], si = R[q][1] + P.lid.reflect * R[q + 2][1];
@@ -217,6 +221,10 @@ export function buildBoard(fs, P = BOARD) {
       }
     }
   }
+  // An open grand has no baffle: below the frequency where a wave wraps round the board
+  // (k * radius = 1, about 67 Hz here), the air moved by the underside cancels the top.
+  const fDip2 = (C / (2 * Math.sqrt(Math.PI * P.a * P.b))) ** 2;
+  for (const pw of power) for (let i = 0; i < grid.length; i++) pw[i] *= (grid[i] * grid[i]) / (grid[i] * grid[i] + fDip2);
   const len = Math.floor(P.seconds * fs), fade = Math.floor(0.05 * fs), irs = [];
   let peak = 0;
   // Above 200 Hz the energy is averaged over a semitone: a resonance narrower than the step

@@ -100,3 +100,12 @@ test('for the knocks of the action the board rings as long as a board that loses
     assert.ok(mid > 12 && mid < 70, `response ${k}, 1 to 2 kHz: ${mid.toFixed(0)} ms`);
   }
 });
+
+test('below its lowest resonance an open soundboard radiates far less', () => {
+  // Held by its stiffness below 49 Hz, and unbaffled (air from the underside wraps round the
+  // board below ~67 Hz): at 30 Hz the bass bridge radiates at least 12 dB less than at 100 Hz.
+  const h = cachedBoard().irs[0], N = 65536, re = new Float64Array(N), im = new Float64Array(N);
+  re.set(h); fft(re, im);
+  const at = (f) => { const i = Math.round((f * N) / FS); return 10 * Math.log10(re[i] * re[i] + im[i] * im[i]); };
+  assert.ok(at(100) - at(30) > 12, `30 Hz is ${(at(100) - at(30)).toFixed(1)} dB under 100 Hz`);
+});
