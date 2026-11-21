@@ -100,12 +100,13 @@ function designDamping(f0, b1, b3, fs, flat = 0) {
 
 // Stiffness: allpass filters in the loop delay the low partials more than the high ones,
 // putting partials 2..K at f_k = k f sqrt((1 + B k²) / (1 + B)) while the delay line tunes
-// the fundamental. From C#3 up, M equal first-order sections suffice. In the bass a real
-// pole puts all its group delay near 0 Hz: above 1 kHz the partials stop stretching and
-// arrive together on every trip as a rubbery buzz. There, Q second-order sections are placed
-// at equal 2*pi steps of the stiff string's phase up to DISP_TOP Hz (after Abel, Välimäki
-// and Smith 2010), and their pole overlap is fitted by golden-section search.
-const MAX_SECTIONS = 16, MAX_BIQUADS = 28, DISP_TOP = 3800;
+// the fundamental. From D#3 up, M equal first-order sections suffice. Below that a real pole
+// puts all its group delay near 0 Hz: above 1 kHz the partials stop stretching and arrive
+// together on every trip as a rubbery buzz (or, if stopped at 3.8 kHz, as a high whistle on
+// the hardest blows). There, Q second-order sections are placed at equal 2*pi steps of the
+// stiff string's phase up to DISP_TOP Hz (after Abel, Välimäki and Smith 2010), and their
+// pole overlap is fitted by golden-section search.
+const MAX_SECTIONS = 16, MAX_BIQUADS = 40, DISP_TOP = 5000;
 const partialsFitted = (f) => Math.max(2, Math.min(40, Math.floor(6000 / f)));
 function sectionsFor(f, B, fs) {
   const N = fs / f, K = partialsFitted(f);
@@ -113,7 +114,7 @@ function sectionsFor(f, B, fs) {
 }
 function biquadsFor(f, B, fs) {
   if (!(B > 0)) return 0;
-  const w0 = (TAU * f) / fs, wTop = Math.min(0.8 * Math.PI, (TAU * DISP_TOP) / fs);
+  const w0 = (TAU * f) / fs, wTop = Math.min(0.82 * Math.PI, (TAU * DISP_TOP) / fs);
   if (wTop <= 2 * w0) return 0;
   const r2 = (wTop / w0) ** 2 * (1 + B), kt = Math.sqrt((Math.sqrt(1 + 4 * B * r2) - 1) / (2 * B));
   const dw = (w0 * (1 + 2 * B * kt * kt)) / Math.sqrt((1 + B) * (1 + B * kt * kt));
@@ -121,7 +122,7 @@ function biquadsFor(f, B, fs) {
   return Q >= 3 ? clamp(Q, 3, MAX_BIQUADS) : 0;
 }
 function designBiquadDispersion(f, B, Q, a, m, fs, a1Out, a2Out) {
-  const w0 = (TAU * f) / fs, wTop = Math.min(0.8 * Math.PI, (TAU * DISP_TOP) / fs);
+  const w0 = (TAU * f) / fs, wTop = Math.min(0.82 * Math.PI, (TAU * DISP_TOP) / fs);
   const kOf = (w) => Math.sqrt((Math.sqrt(1 + 4 * B * (w / w0) ** 2 * (1 + B)) - 1) / (2 * B));
   const kt = kOf(wTop), nBase = TAU / ((w0 * (1 + 2 * B * kt * kt)) / Math.sqrt((1 + B) * (1 + B * kt * kt)));
   const phi = (w) => TAU * kOf(w) - w * nBase, phiMax = phi(wTop);
@@ -133,14 +134,15 @@ function designBiquadDispersion(f, B, Q, a, m, fs, a1Out, a2Out) {
   const edges = new Float64Array(Q + 1), th = new Float64Array(Q), dth = new Float64Array(Q);
   for (let j = 0; j <= Q; j++) edges[j] = inv((j * phiMax) / Q);
   for (let j = 0; j < Q; j++) { th[j] = inv(((j + 0.5) * phiMax) / Q); dth[j] = edges[j + 1] - edges[j]; }
-  const N = fs / f, lp1 = lpDelay(a, m, w0), kFit = Math.min(90, Math.floor(kt)), step = Math.max(1, Math.floor(kFit / 28));
+  const N = fs / f, lp1 = lpDelay(a, m, w0), kFit = Math.min(110, Math.floor(kt)), step = Math.max(1, Math.floor(kFit / 32));
   const ks = [], ws = [], lps = [], needs = [];
   for (let k = 2; k <= kFit; k += step) {
     const fk = k * f * Math.sqrt((1 + B * k * k) / (1 + B)), wk = (TAU * fk) / fs;
     ks.push(k); ws.push(wk); lps.push(lpDelay(a, m, wk)); needs.push(N - (k * fs) / fk);
   }
+  const rMax = Math.exp(-180 / fs);
   const fill = (alpha) => {
-    for (let j = 0; j < Q; j++) { const r = Math.min(0.996, Math.exp(-alpha * dth[j])); a1Out[j] = -2 * r * Math.cos(th[j]); a2Out[j] = r * r; }
+    for (let j = 0; j < Q; j++) { const r = Math.min(rMax, Math.exp(-alpha * dth[j])); a1Out[j] = -2 * r * Math.cos(th[j]); a2Out[j] = r * r; }
   };
   const err = (alpha) => {
     fill(alpha);
@@ -279,16 +281,16 @@ const PIANO = {
   // the beating partials sweep evenly over the spectrum: a flanger. An estimate: at the same
   // pitch B grows with the square of the wire's diameter (made to about 1 %), and more on the
   // copper-wound strings.
-  stiff: [[21, 0.04], [40, 0.04], [41, 0.02], [108, 0.02]],
+  stiff: [[21, 0.05], [40, 0.05], [48, 0.02], [108, 0.02]],
   // LONGITUDINAL MODES OF THE BASS STRINGS (Conklin 1999; Bank and Sujbert 2004, 2005). As a
   // bass string swings, its length stretches with the square of its slope: that pulls along
   // the steel core at the sum and difference of its transverse partials (phantom partials) and
-  // excites the string's longitudinal resonances, which reach the bridge at once and give the
-  // bass its metallic edge instead of a rubbery thud. longHz: lowest longitudinal mode, Hz
-  // (read off the phantom clusters in the recorded Steinway B C1 and C2, and scaled up to G3).
-  longHz: [[21, 580], [24, 700], [36, 1350], [48, 2250], [55, 3200]],
+  // excites the string's broad longitudinal resonances, which reach the bridge at once and give
+  // the bass its metallic edge instead of a rubbery thud. longHz: lowest longitudinal mode, Hz
+  // (read off the phantom clusters in the recorded Steinway B C1 and C2, and scaled up to C3).
+  longHz: [[21, 580], [24, 700], [36, 1350], [48, 2250]],
   long: 0.14,         // coupling of longitudinal tension to the bridge (an estimate)
-  longTop: 55,        // highest key with longitudinal modes
+  longTop: 48,        // highest key with longitudinal modes
   // NO TWO STRIKES THE SAME. Each strike draws, evenly within +- these shares: the hammer's
   // speed, the felt's stiffness, the share of the blow each string takes, the knock's size and
   // length. While the felt is on the strings its stiffness has noise of +- feltNoise, below
@@ -344,7 +346,7 @@ const hammerSpeed = (v) => 0.25 + 4.75 * Math.pow(clamp(v, 0, 1), 1.6);
 
 // ---- one string ------------------------------------------------------------------
 
-const MAX_LONG = 5;
+const MAX_LONG = 4;
 
 class PString {
   constructor(size) {
@@ -413,7 +415,8 @@ class Voice {
     this.contact = false; this.hv = 0; this.hy = 0; this.sy = 0; this.hu = 0; this.hF = 0; this.hN = 0;
     this.hM = 1; this.hK = 1; this.hP = 2.5; this.hA = 0; this.contactFrames = 0;
     // longitudinal modes of the bass strings
-    this.lN = 0; this.lOdd = 0; this.lo1 = 0; this.lo2 = 0; this.le1 = 0; this.le2 = 0;
+    this.lN = 0; this.lOdd = 0; this.lLp = 0; this.lo1 = 0; this.lo2 = 0; this.le1 = 0; this.le2 = 0;
+    this.lu0 = 0; this.lu1 = 0; this.lu2 = 0; this.lh0 = 0; this.lh1 = 0; this.lh2 = 0;
     this.lb0 = new Float64Array(MAX_LONG); this.la1 = new Float64Array(MAX_LONG); this.la2 = new Float64Array(MAX_LONG);
     this.ly1 = new Float64Array(MAX_LONG); this.ly2 = new Float64Array(MAX_LONG);
     this.design();
@@ -475,18 +478,21 @@ class Voice {
     this.dampOn = this.hasDamper ? Math.exp(-interp(PIANO.damper, m, true) / f) : 1;
     this.knock = Math.pow(10, interp(PIANO.knockKey, m) / 20);
     // Longitudinal modes: axial tension ~ 1/2 E S (dy/dx)^2 = 1/2 (Z / c_T) (f_L / f)^2 u^2,
-    // coupled into transverse bridge motion as ~ sqrt(f) by the rocking of the bridge cap
-    // (Bank and Sujbert 2005). Driven at the bridge and at the hammer (two-point quadrature of
-    // integral((dy/dx)^2 cos(k pi x / L) dx): odd modes take the difference, even the sum).
+    // driven at the bridge and at the hammer (two-point quadrature of integral((dy/dx)^2
+    // cos(k pi x / L) dx): odd modes take the difference, even the sum). Heavily damped by the
+    // bridge (Q ~ 12..14, Bank and Sujbert 2005) and fed from the string's slope below ~1 kHz,
+    // so they shape broad phantom clusters instead of whistling at their own pitches on hard blows.
     this.lN = 0; this.lOdd = 0;
+    this.lLp = 1 - Math.exp((-TAU * 950) / fs);
     if (PIANO.long > 0 && m <= PIANO.longTop) {
       const fL = interp(PIANO.longHz, m, true), cT = 2 * interp(PIANO.length, m, true) * f;
-      const axial = PIANO.long * 0.5 * ((this.zs * n) / cT) * ((fL / f) ** 2) * trim;
+      const taper = clamp((PIANO.longTop + 2 - m) / 10, 0, 1);
+      const axial = PIANO.long * taper * 0.5 * ((this.zs * n) / cT) * ((fL / f) ** 2) * trim;
       for (let k = 1; k <= MAX_LONG; k++) {
         const fk = k * fL * (1 - 0.004 * (k - 1));
-        if (fk > 4400 || fk > 0.42 * fs) break;
-        const rL = Math.exp(-(18 + 0.008 * fk) / fs), j = this.lN++;
-        this.lb0[j] = (axial * (fL / fs) * Math.sqrt(fk / 1000)) / k;
+        if (fk > 2700 || fk > 0.42 * fs) break;
+        const sigmaL = 80 + 0.22 * fk, rL = Math.exp(-sigmaL / fs), j = this.lN++;
+        this.lb0[j] = (axial * (sigmaL / fs) * 6) / (k * k);
         this.la1[j] = 2 * rL * Math.cos((TAU * fk) / fs);
         this.la2[j] = -(rL * rL);
         if (k & 1) this.lOdd |= 1 << j;
@@ -593,12 +599,21 @@ class Voice {
       if (a > pk) pk = a;
       let force = fb * (2 * sum - n * vb);
       if (lN) {
-        const ubr = sum / n, ubr2 = (ubr * ubr) / (1 + 0.02 * ubr * ubr);
-        let uh2 = 0;
-        const h0 = s0.b[(s0.w - 1 - s0.ha) & s0.mask]; uh2 += (h0 * h0) / (1 + 0.02 * h0 * h0);
-        if (s1) { const h1 = s1.b[(s1.w - 1 - s1.ha) & s1.mask]; uh2 += (h1 * h1) / (1 + 0.02 * h1 * h1); }
-        if (s2) { const h2 = s2.b[(s2.w - 1 - s2.ha) & s2.mask]; uh2 += (h2 * h2) / (1 + 0.02 * h2 * h2); }
-        uh2 /= n;
+        const lp = this.lLp;
+        const b0 = (this.lu0 += lp * (u0 - this.lu0));
+        const h0 = (this.lh0 += lp * (s0.b[(s0.w - 1 - s0.ha) & s0.mask] - this.lh0));
+        let ubr2 = b0 * b0, uh2 = h0 * h0;
+        if (s1) {
+          const b1 = (this.lu1 += lp * (u1 - this.lu1));
+          const h1 = (this.lh1 += lp * (s1.b[(s1.w - 1 - s1.ha) & s1.mask] - this.lh1));
+          ubr2 += b1 * b1; uh2 += h1 * h1;
+        }
+        if (s2) {
+          const b2 = (this.lu2 += lp * (u2 - this.lu2));
+          const h2 = (this.lh2 += lp * (s2.b[(s2.w - 1 - s2.ha) & s2.mask] - this.lh2));
+          ubr2 += b2 * b2; uh2 += h2 * h2;
+        }
+        ubr2 /= n; uh2 /= n;
         const xo = ubr2 - uh2, xe = ubr2 + uh2;
         const dOdd = xo - this.lo2, dEvn = xe - this.le2;
         this.lo2 = this.lo1; this.lo1 = xo; this.le2 = this.le1; this.le1 = xe;
@@ -619,6 +634,7 @@ class Voice {
   clear() {
     for (const s of this.strings) s.clear();
     this.ly1.fill(0); this.ly2.fill(0); this.lo1 = this.lo2 = this.le1 = this.le2 = 0;
+    this.lu0 = this.lu1 = this.lu2 = this.lh0 = this.lh1 = this.lh2 = 0;
     this.contact = false; this.dropped = false; this.peak = 0; this.quiet = 0; this.dg = this.dgT = 1;
   }
 }

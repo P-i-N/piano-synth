@@ -52,7 +52,7 @@ test('the scale is the recorded piano\'s: stiffness of the strings and stretch o
 
 test('strings are as stiff as the scale says: partials are stretched', () => {
   // B from a few partials: f_k = k f1 sqrt((1 + B k²) / (1 + B)), also high partials in the bass
-  for (const [m, ks] of [[21, [20, 40, 60]], [24, [20, 40, 60]], [36, [12, 16, 20]], [48, [8, 12, 16]], [60, [6, 8, 10]], [72, [4, 5, 6]]]) {
+  for (const [m, ks] of [[21, [20, 45, 80]], [24, [20, 45, 75]], [36, [12, 20, 35]], [48, [8, 14, 22]], [60, [6, 8, 10]], [72, [4, 5, 6]]]) {
     const x = withPiano({ detune: 0, long: 0 }, () => note(m, 0.7, 1.2));
     const f1 = freqNear(x, keyHz(m), 0.05, 1).f, want = inharmonicity(m), Bs = [];
     for (const k of ks) {
@@ -326,4 +326,13 @@ test('bass strings pull along their length: longitudinal modes arrive before the
     return db(rms(a.map((x, i) => x - b[i]), 0.02, 0.3)) - db(rms(b, 0.02, 0.3));
   };
   assert.ok(diff(0.9) - diff(0.3) > 8, `longitudinal share grows from ${diff(0.3).toFixed(1)} to ${diff(0.9).toFixed(1)} dB`);
+  // Heavily damped by the bridge, they stay under the transverse highs even on a full-velocity
+  // blow instead of ringing out as high whistles of their own.
+  const n = 16384, st = Math.floor(0.01 * FS);
+  for (const m of [21, 25, 28, 36, 38, 48]) {
+    const a = note(m, 1, 0.4, 0, { noise: 0 }), b = withPiano({ long: 0 }, () => note(m, 1, 0.4, 0, { noise: 0 }));
+    const lg = spectrum(a.map((x, i) => x - b[i]), st, n), tr = spectrum(b, st, n);
+    const rel = 10 * Math.log10(bandEnergy(lg, n, 1200, 5000) / bandEnergy(tr, n, 1200, 5000));
+    assert.ok(rel < -6, `key ${m} at v=1: longitudinal 1.2-5 kHz is ${rel.toFixed(1)} dB against transverse`);
+  }
 });
