@@ -1,7 +1,7 @@
 // The soundboard: its resonances, its responses, and what the keyboard sounds like through it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { plateModes, buildBoard, BOARD, CHAIN, chainGain } from '../js/board/model.js';
+import { plateModes, buildBoard, boardConfig, BOARD, CHAIN, chainGain } from '../js/board/model.js';
 import { facts, vFor } from '../tools/notes.mjs';
 import { FS, aLevel, cachedBoard, heardStereo, both, steady } from './util.mjs';
 
@@ -108,4 +108,22 @@ test('below its lowest resonance an open soundboard radiates far less', () => {
   re.set(h); fft(re, im);
   const at = (f) => { const i = Math.round((f * N) / FS); return 10 * Math.log10(re[i] * re[i] + im[i] * im[i]); };
   assert.ok(at(100) - at(30) > 12, `30 Hz is ${(at(100) - at(30)).toFixed(1)} dB under 100 Hz`);
+});
+
+test('soundboard progress, body controls and high-fidelity board behave physically', () => {
+  assert.equal(boardConfig(), BOARD);
+  assert.equal(boardConfig({ hiFi: 0, bodySize: 1, bodyStiff: 0, bodyCrown: 38, bodyRes: 0, bodyLid: 35 }), BOARD);
+  const baby = plateModes(boardConfig({ bodySize: 0.72, bodyStiff: 0.15, bodyCrown: 48 }));
+  const imp = plateModes(boardConfig({ bodySize: 1.18, bodyStiff: -0.05, bodyCrown: 33 }));
+  assert.ok(baby[0].f > 65 && imp[0].f < 45, `lowest mode: baby ${baby[0].f.toFixed(1)} Hz, imperial ${imp[0].f.toFixed(1)} Hz`);
+
+  const prog = [];
+  const hf = buildBoard(FS, boardConfig({ hiFi: 1 }), (p) => prog.push(p));
+  assert.ok(prog.length >= 10 && prog[0] === 0 && Math.abs(prog[prog.length - 1] - 1) < 1e-9, 'progress goes from 0 to 1');
+  for (let i = 1; i < prog.length; i++) assert.ok(prog[i] >= prog[i - 1], 'progress is monotonic');
+  assert.ok(hf.modes > 1350 && hf.irs[0].length > 1.5 * FS, `hiFi modes ${hf.modes}, length ${hf.irs[0].length}`);
+  assert.ok(hf.gain > 0.5 && hf.gain < 1.2, `hiFi gain ${hf.gain}`);
+
+  const closed = buildBoard(FS, boardConfig({ bodyLid: 0 }));
+  assert.ok(closed.gain < 0.65, `closed lid reduces overall gain (${closed.gain.toFixed(2)}) instead of boosting lows`);
 });

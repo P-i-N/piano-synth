@@ -6,20 +6,23 @@
 // prints the long-term third-octave spectrum of the demo, and its difference to a recording.
 
 import { fileURLToPath } from 'node:url';
+import { boardConfig, BOARD, buildBoard } from '../js/board/model.js';
 import { DEMOS } from '../js/demos.js';
 import { perform } from '../js/player.js';
 import { compile, eventsBetween, songEnd, tickSecs, humanOf } from '../js/song.js';
-import { engine, throughBoard, cachedBoard } from '../test/util.mjs';
+import { FS, engine, throughBoard, cachedBoard } from '../test/util.mjs';
 import { ltas, decode, BANDS } from './ltas.mjs';
 
 // the two microphones mixed to one; seconds: how much of the song (0: all of it and 3 s more)
-export function heardSong(song, seconds = 0, board = cachedBoard()) {
+export function heardSong(song, seconds = 0, board = null) {
   const h = humanOf(song.inst), list = h > 0 ? perform(song, { seed: 1, human: h }) : compile(song);
-  const e = engine({ hard: song.inst.hard, noise: song.inst.noise });
+  const e = engine({ hard: song.inst.hard, noise: song.inst.noise, hiFi: song.inst.hiFi });
+  const cfg = boardConfig(song.inst);
+  const b = board || (cfg === BOARD ? cachedBoard() : buildBoard(FS, cfg));
   const secs = seconds || songEnd(song) * tickSecs(song) + 3;
   for (const ev of eventsBetween(song, list, 0, secs / tickSecs(song), 0.05)) e.post(ev);
-  const { L, R } = throughBoard(e, secs, board), out = new Float32Array(L.length);
-  for (let i = 0; i < out.length; i++) out[i] = 0.5 * (L[i] + R[i]);
+  const { L, R } = throughBoard(e, secs, b), out = new Float32Array(L.length), g = 0.5 * (b.gain || 1);
+  for (let i = 0; i < out.length; i++) out[i] = g * (L[i] + R[i]);
   return out;
 }
 

@@ -3,7 +3,7 @@
 
 import { makeReverbIR } from './ir.js';
 import { DELAY_TIMES, eventsBetween, songEnd, tickSecs } from './song.js';
-import { MODEL_VERSION } from './board/model.js';
+import { MODEL_VERSION, BOARD, boardConfig, boardSignature } from './board/model.js';
 
 // (the version in the address makes a browser fetch the engine again when the model changes:
 // an old engine with a new page would send six channels where seven are expected)
@@ -18,9 +18,12 @@ export const BOARD_LEVEL = 0.221;
 // as it is, each of the six places only set between the speakers, bass left.
 export const DIRECT = { pan: [-0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 0] };
 
-// ---- the soundboard: built once in a worker, kept in IndexedDB ---------------------
+// ---- the soundboard: built in a worker with progress, kept in IndexedDB ------------
 
-export const cacheKey = (fs) => `board:${MODEL_VERSION}:${fs}`;
+export const cacheKey = (fs, cfg = BOARD) => {
+  const sig = boardSignature(cfg);
+  return sig === 'default' ? `board:${MODEL_VERSION}:${fs}` : `board:${MODEL_VERSION}:${fs}:${sig}`;
+};
 
 // is this (possibly cached) record a usable soundboard for this sample rate?
 export function validBoard(rec, fs) {
@@ -53,32 +56,97 @@ function idb(op, key, value) {
   });
 }
 
-function buildInWorker(fs) {
+let workerSeq = 0;
+let activeBuild = null;
+
+function cancelActiveBuild(exceptKey = '') {
+  if (activeBuild && activeBuild.key !== exceptKey) {
+    activeBuild.cancel();
+    activeBuild = null;
+  }
+}
+
+function buildInWorker(key, fs, cfg, notify) {
   return new Promise((resolve, reject) => {
     let w;
     try { w = new Worker(new URL('./board/worker.js', import.meta.url), { type: 'module' }); } catch (e) { reject(e); return; }
-    w.onmessage = (e) => { w.terminate(); if (e.data && e.data.ok) resolve(e.data.board); else reject(new Error((e.data && e.data.error) || 'soundboard model failed')); };
-    w.onerror = (e) => { w.terminate(); reject(new Error(e.message || 'soundboard worker failed')); };
-    w.postMessage({ fs });
+    const id = ++workerSeq;
+    let settled = false;
+    const entry = {
+      key,
+      notify,
+      cancel() {
+        if (settled) return;
+        settled = true;
+        w.terminate();
+        const err = new Error('cancelled');
+        err.cancelled = true;
+        reject(err);
+      },
+    };
+    activeBuild = entry;
+    w.onmessage = (e) => {
+      const d = e.data;
+      if (!d || (d.id != null && d.id !== id)) return;
+      if (d.type === 'progress') {
+        if (entry.notify) entry.notify(d.p);
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      if (activeBuild === entry) activeBuild = null;
+      w.terminate();
+      if (d.ok) resolve(d.board);
+      else reject(new Error(d.error || 'soundboard model failed'));
+    };
+    w.onerror = (e) => {
+      if (settled) return;
+      settled = true;
+      if (activeBuild === entry) activeBuild = null;
+      w.terminate();
+      reject(new Error(e.message || 'soundboard worker failed'));
+    };
+    w.postMessage({ id, fs, cfg: cfg === BOARD ? null : cfg });
   });
 }
 
-async function loadBoard(fs) {
-  const key = cacheKey(fs), cached = await idb('get', key).catch(() => null);
+const boards = new Map();
+
+async function loadBoard(key, fs, cfg, notify) {
+  const cached = await idb('get', key).catch(() => null);
   if (validBoard(cached, fs)) return cached;
   if (cached) idb('delete', key).catch(() => {}); // stale or damaged: never used
+  if (notify) notify(0);
   // without module workers the board is built here, which blocks the page for a moment
-  const board = await buildInWorker(fs).catch(async () => (await import('./board/model.js')).buildBoard(fs));
+  const board = await buildInWorker(key, fs, cfg, notify).catch(async (err) => {
+    if (err && err.cancelled) throw err;
+    return (await import('./board/model.js')).buildBoard(fs, cfg, notify);
+  });
   if (!validBoard(board, fs)) throw new Error('the soundboard model returned an unusable result');
   idb('put', key, board).catch(() => {});
   return board;
 }
 
-const boards = new Map();
-// The soundboard (a promise; built or fetched once per page).
-export function getBoard(fs) {
-  if (!boards.has(fs)) { const p = loadBoard(fs); p.catch(() => {}); boards.set(fs, p); }
-  return boards.get(fs);
+// The soundboard (a promise; built or fetched once per configuration).
+export function getBoard(fs, cfg = BOARD, onProgress = null, cancelOther = false) {
+  const key = cacheKey(fs, cfg);
+  if (cancelOther) cancelActiveBuild(key);
+  if (boards.has(key)) {
+    if (activeBuild && activeBuild.key === key && onProgress) activeBuild.notify = onProgress;
+    return boards.get(key);
+  }
+  let currentCb = onProgress;
+  const notify = (p) => { if (currentCb) currentCb(p); };
+  const p = loadBoard(key, fs, cfg, notify);
+  if (activeBuild && activeBuild.key === key) activeBuild.notify = (v) => { if (currentCb) currentCb(v); };
+  p.catch(() => { boards.delete(key); });
+  // keep at most 6 distinct bodies in RAM (all remain persisted in IndexedDB)
+  if (boards.size >= 6) {
+    const first = boards.keys().next().value;
+    if (first && (!activeBuild || activeBuild.key !== first)) boards.delete(first);
+  }
+  boards.set(key, p);
+  return p;
 }
 
 function toBuffer(ctx, ir) {
@@ -95,7 +163,7 @@ function reverbBuffer(ctx, size, tone) {
   return toBuffer(ctx, irCache.get(key));
 }
 
-const engineCfg = (inst) => ({ type: 'cfg', hard: inst.hard, noise: inst.noise });
+const engineCfg = (inst) => ({ type: 'cfg', hard: inst.hard, noise: inst.noise, hiFi: inst.hiFi ? 1 : 0 });
 
 class Graph {
   constructor(ctx, node) {
@@ -104,20 +172,27 @@ class Graph {
     const gain = (v) => { const g = c.createGain(); g.gain.value = v; return g; };
     // The engine sends seven channels: the force on the bridge at six places, bass to treble,
     // and the knocks of the action. Each goes through its response of the soundboard (two
-    // microphones).
+    // microphones), with two slots for click-free crossfades when the body is recalculated.
     const split = c.createChannelSplitter(7);
     node.connect(split);
-    this.direct = gain(1); this.board = gain(0);
-    this.zones = [];
+    this.direct = gain(1);
     for (let z = 0; z < 7; z++) {
       const pan = c.createStereoPanner(); pan.pan.value = DIRECT.pan[z];
       split.connect(pan, z); pan.connect(this.direct);
-      const conv = c.createConvolver(); conv.normalize = false;
-      split.connect(conv, z); conv.connect(this.board);
-      this.zones.push(conv);
     }
     this.inst = gain(LEVEL);
-    this.direct.connect(this.inst); this.board.connect(this.inst);
+    this.direct.connect(this.inst);
+    this.boardSlots = [0, 1].map(() => {
+      const g = gain(0), zones = [];
+      for (let z = 0; z < 7; z++) {
+        const conv = c.createConvolver(); conv.normalize = false;
+        split.connect(conv, z); conv.connect(g);
+        zones.push(conv);
+      }
+      g.connect(this.inst);
+      return { zones, g };
+    });
+    this.boardSlot = 0; this.hasBoard = false;
     this.master = gain(1);
     this.inst.connect(this.master);
 
@@ -166,12 +241,30 @@ class Graph {
 
   setInstrument(inst) { this.node.port.postMessage(engineCfg(inst)); }
 
-  // the soundboard is heard from now on, in place of the bare force on the bridge
+  // the soundboard is heard from now on, crossfading cleanly when swapped live
   loadBoard(board, now) {
-    for (let z = 0; z < 7; z++) this.zones[z].buffer = toBuffer(this.ctx, { L: board.irs[2 * z], R: board.irs[2 * z + 1] });
-    const t = this.ctx.currentTime;
-    if (now) { this.board.gain.setTargetAtTime(BOARD_LEVEL, t, 0.03); this.direct.gain.setTargetAtTime(0, t, 0.03); }
-    else { this.board.gain.setValueAtTime(BOARD_LEVEL, 0); this.direct.gain.setValueAtTime(0, 0); }
+    const lvl = BOARD_LEVEL * (typeof board.gain === 'number' ? board.gain : 1);
+    if (!now || !this.hasBoard) {
+      const cur = this.boardSlots[this.boardSlot];
+      for (let z = 0; z < 7; z++) cur.zones[z].buffer = toBuffer(this.ctx, { L: board.irs[2 * z], R: board.irs[2 * z + 1] });
+      this.hasBoard = true;
+      const t = this.ctx.currentTime;
+      if (now) {
+        cur.g.gain.cancelScheduledValues(t); cur.g.gain.setTargetAtTime(lvl, t, 0.03);
+        this.direct.gain.cancelScheduledValues(t); this.direct.gain.setTargetAtTime(0, t, 0.03);
+      } else {
+        cur.g.gain.setValueAtTime(lvl, 0);
+        this.direct.gain.setValueAtTime(0, 0);
+      }
+      return;
+    }
+    const t = this.ctx.currentTime, old = this.boardSlots[this.boardSlot];
+    this.boardSlot ^= 1;
+    const cur = this.boardSlots[this.boardSlot];
+    for (let z = 0; z < 7; z++) cur.zones[z].buffer = toBuffer(this.ctx, { L: board.irs[2 * z], R: board.irs[2 * z + 1] });
+    cur.g.gain.cancelScheduledValues(t); cur.g.gain.setTargetAtTime(lvl, t, 0.045);
+    old.g.gain.cancelScheduledValues(t); old.g.gain.setTargetAtTime(0, t, 0.045);
+    this.direct.gain.cancelScheduledValues(t); this.direct.gain.setTargetAtTime(0, t, 0.03);
   }
 
   setFx(fx, bpm, now) {
@@ -203,7 +296,13 @@ class Graph {
 }
 
 export class AudioEngine {
-  constructor() { this.ctx = null; this.graph = null; this.ready = null; this.song = null; this.boardReady = Promise.resolve(); this.onNotice = null; }
+  constructor() {
+    this.ctx = null; this.graph = null; this.ready = null; this.song = null;
+    this.boardReady = Promise.resolve(); this.boardKey = ''; this.boardLoaded = '';
+    this.onNotice = null; this.onBoardProgress = null;
+  }
+
+  get sampleRate() { return this.ctx ? this.ctx.sampleRate : 48000; }
 
   // must first be called from a user gesture
   init() {
@@ -215,10 +314,8 @@ export class AudioEngine {
         const node = new AudioWorkletNode(this.ctx, 'piano-strings', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [7] });
         this.graph = new Graph(this.ctx, node);
         if (this.song) { this.graph.setInstrument(this.song.inst); this.graph.setFx(this.song.fx, this.song.bpm, false); }
-        this.boardReady = getBoard(this.ctx.sampleRate).then((b) => this.graph.loadBoard(b, true), (err) => {
-          console.warn('soundboard unavailable:', err);
-          if (this.onNotice) this.onNotice('The soundboard could not be built in this browser');
-        });
+        this.boardLoaded = '';
+        this.syncBoard();
       })();
       this.ready.catch(() => { this.ready = null; });
     }
@@ -230,9 +327,35 @@ export class AudioEngine {
   get time() { return this.ctx ? this.ctx.currentTime : 0; }
   get latency() { return this.ctx ? (this.ctx.outputLatency || this.ctx.baseLatency || 0) : 0; }
 
-  setSong(song) { this.song = song; this.syncInstrument(); this.syncFx(); }
+  setSong(song) { this.song = song; this.syncInstrument(); this.syncFx(); this.syncBoard(); }
   syncInstrument() { if (this.graph && this.song) this.graph.setInstrument(this.song.inst); }
   syncFx() { if (this.graph && this.song) this.graph.setFx(this.song.fx, this.song.bpm, true); }
+
+  // Build (or load from IndexedDB) the soundboard for the current song's body & fidelity.
+  syncBoard() {
+    if (!this.song) return this.boardReady;
+    const fs = this.sampleRate, cfg = boardConfig(this.song.inst), key = cacheKey(fs, cfg);
+    if (key === this.boardKey && (!this.graph || this.boardLoaded === key)) return this.boardReady;
+    this.boardKey = key;
+    const report = (st) => { if (this.boardKey === key && this.onBoardProgress) this.onBoardProgress(st); };
+    this.boardReady = getBoard(fs, cfg, (p) => report({ active: true, p }), true).then(
+      (b) => {
+        if (this.boardKey !== key) return;
+        if (this.graph && this.boardLoaded !== key) {
+          this.graph.loadBoard(b, true);
+          this.boardLoaded = key;
+        }
+        report({ active: false, p: 1, modes: b.modes });
+      },
+      (err) => {
+        if (err && err.cancelled) return;
+        console.warn('soundboard unavailable:', err);
+        report({ active: false, p: 0, error: true });
+        if (this.onNotice) this.onNotice('The soundboard could not be built in this browser');
+      },
+    );
+    return this.boardReady;
+  }
 
   send(events) { if (this.graph && events.length) this.graph.node.port.postMessage({ type: 'batch', events }); }
   // drop everything scheduled
@@ -257,11 +380,11 @@ export class AudioEngine {
 
 // Render the whole song to an AudioBuffer (for WAV export). list: what the keys and the pedal
 // do, from compile() or perform().
-export async function renderSong(song, list, sampleRate = 48000) {
+export async function renderSong(song, list, sampleRate = 48000, onProgress = null) {
   const lead = 0.05, tail = Math.min(14, (song.fx.revOn ? song.fx.revSize : 0) + 6);
   const dur = lead + songEnd(song) * tickSecs(song) + tail;
   // the soundboard must be there before rendering starts
-  const board = await getBoard(sampleRate);
+  const board = await getBoard(sampleRate, boardConfig(song.inst), onProgress, false);
   const ctx = new OfflineAudioContext(2, Math.ceil(dur * sampleRate), sampleRate);
   await ctx.audioWorklet.addModule(WORKLET_URL);
   const events = eventsBetween(song, list, 0, Infinity, lead);

@@ -45,6 +45,24 @@ test('the strings stop ringing along when the pedal comes up', () => {
   assert.ok(drop > 30, `0.7 s after the pedal came up: ${drop.toFixed(1)} dB down`);
 });
 
+test('in high-fidelity mode all 88 keys resonate sympathetically under the pedal', () => {
+  const run = (hiFi, symp = PIANO.sympathy) => withPiano({ sympathy: symp }, () => {
+    const e = engine({ hiFi, noise: 0 });
+    e.post({ type: 'p', t: 0, v: 1 });
+    e.post({ type: 'n', t: 0.05, m: 66, v: 0.9 }); // F#4 staccato; its 2nd partial excites damped F#5 (key 78)
+    e.post({ type: 'o', t: 0.2, m: 66 });
+    const out = render(e, 2);
+    return { out, active: e.sympathy.list.filter((r) => !r.idle).length };
+  });
+  const s0 = run(0), s1 = run(1);
+  assert.equal(s0.active, 43);
+  assert.equal(s1.active, 88);
+  const extraStd = diff(s0.out, run(0, 0).out), extraHiFi = diff(s1.out, run(1, 0).out);
+  const f5Std = db(freqNear(extraStd, keyHz(78), 0.6, 0.8, 0.005).mag + 1e-30);
+  const f5HiFi = db(freqNear(extraHiFi, keyHz(78), 0.6, 0.8, 0.005).mag + 1e-30);
+  assert.ok(f5HiFi - f5Std > 6, `sympathetic F#5 after F#4: ${f5HiFi.toFixed(1)} dB hiFi vs ${f5Std.toFixed(1)} dB standard`);
+});
+
 // ---- the noises of the action ---------------------------------------------------------
 import { knockLevel, vFor } from '../tools/notes.mjs';
 import { heardStereo, steady } from './util.mjs';

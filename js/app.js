@@ -154,14 +154,10 @@ async function preview(m, vel) {
 
 // ---- transport & live MIDI recording -----------------------------------------
 
-// The audio context, and the soundboard (about a second to build, the first time in this browser).
+// The audio context, and the soundboard (progress is shown in #boardProg / #bodyProg).
 async function ready() {
   await audio.init();
-  let shown = false;
-  const t = setTimeout(() => { shown = true; toast('Building the soundboard…', 15000); }, 250);
   await audio.boardReady;
-  clearTimeout(t);
-  if (shown) toast('Ready', 900);
 }
 
 // tick `baseTick` sounds at audio time `baseTime`; events are sent up to tick `tick`
@@ -536,16 +532,87 @@ function mkSlider(parent, get, set, label, min, max, step, fmt) {
   return row;
 }
 
-let fxTimer = 0;
+let fxTimer = 0, boardTimer = 0, progHideTimer = 0, lastModes = 0;
 function fxChanged(slow) {
   clearTimeout(fxTimer);
   if (slow) fxTimer = setTimeout(() => audio.syncFx(), 140); else audio.syncFx();
 }
 
+function setBoardProgress({ active, p = 0, modes = 0, error = false }) {
+  const bar = $('boardProg'), lbl = $('boardProgLbl'), fill = $('boardProgFill');
+  const pBar = $('bodyProg'), pFill = $('bodyProgFill'), badge = $('bodyState');
+  clearTimeout(progHideTimer);
+  if (modes) lastModes = modes;
+  if (active) {
+    const pct = Math.min(99, Math.max(0, Math.round(p * 100)));
+    bar.hidden = false; pBar.hidden = false;
+    bar.setAttribute('aria-valuenow', String(pct));
+    lbl.textContent = `Calculating body · ${pct}%`;
+    fill.style.width = pFill.style.width = pct + '%';
+    badge.textContent = `Building ${pct}%`;
+    badge.dataset.state = 'busy';
+    return;
+  }
+  if (error) {
+    bar.hidden = true; pBar.hidden = true;
+    badge.textContent = 'Unavailable';
+    badge.dataset.state = 'off';
+    return;
+  }
+  badge.textContent = lastModes ? `${lastModes} modes` : 'Ready';
+  badge.dataset.state = 'ready';
+  if (!bar.hidden) {
+    bar.setAttribute('aria-valuenow', '100');
+    lbl.textContent = 'Calculating body · 100%';
+    fill.style.width = pFill.style.width = '100%';
+    progHideTimer = setTimeout(() => { bar.hidden = true; pBar.hidden = true; }, 220);
+  } else {
+    pBar.hidden = true;
+  }
+}
+
+function boardChanged(slow) {
+  clearTimeout(boardTimer);
+  if (slow) {
+    $('bodyState').textContent = 'Pending…';
+    $('bodyState').dataset.state = 'busy';
+    boardTimer = setTimeout(() => audio.syncBoard(), 180);
+  } else {
+    audio.syncBoard();
+  }
+}
+
+function syncBodyControls() {
+  $('hiFi').checked = Boolean(song.inst.hiFi);
+  $('hiFiHint').textContent = song.inst.hiFi ? '2-pol · 4× ODE · 14 kHz' : 'Standard';
+  $('bodyPreset').value = S.bodyPreset(song.inst);
+}
+
 function buildSettings() {
   const inst = (k) => [() => song.inst[k], (v) => { song.inst[k] = v; audio.syncInstrument(); }];
+  $('hiFi').addEventListener('change', (e) => {
+    song.inst.hiFi = e.target.checked ? 1 : 0;
+    syncBodyControls();
+    audio.syncInstrument();
+    boardChanged(false);
+    scheduleSave();
+  });
   mkSlider($('instSliders'), ...inst('hard'), 'Hammer felt', -1, 1, 0.02, signed).title = 'Softer or harder hammer felt: a harder felt gives a brighter note';
   mkSlider($('instSliders'), ...inst('noise'), 'Action noise', 0, 1, 0.01, pct).title = 'The knock of key and hammer, keys coming up, the pedal';
+
+  for (const [k, b] of Object.entries(S.BODIES)) $('bodyPreset').append(new Option(b.name, k));
+  $('bodyPreset').append(new Option('Custom', ''));
+  $('bodyPreset').lastChild.disabled = true;
+  $('bodyPreset').addEventListener('change', (e) => {
+    S.setBodyPreset(song.inst, e.target.value);
+    syncBodyControls(); for (const r of sliders) r(); boardChanged(false); scheduleSave();
+  });
+  const body = (k) => [() => song.inst[k], (v) => { song.inst[k] = v; syncBodyControls(); boardChanged(true); }];
+  mkSlider($('bodySliders'), ...body('bodySize'), 'Size', 0.65, 1.45, 0.01, pct).title = 'Soundboard and bridge scale (100% = 2.7 m concert grand)';
+  mkSlider($('bodySliders'), ...body('bodyStiff'), 'Spruce', -0.6, 0.6, 0.02, signed).title = 'Bending stiffness of the spruce soundboard and ribs';
+  mkSlider($('bodySliders'), ...body('bodyCrown'), 'Crown', 20, 58, 1, (v) => Math.round(v) + ' Hz').title = 'Arch and string downbearing stiffness of the lowest resonances';
+  mkSlider($('bodySliders'), ...body('bodyRes'), 'Sustain', -0.6, 0.6, 0.02, signed).title = 'How long the soundboard resonances ring';
+  mkSlider($('bodySliders'), ...body('bodyLid'), 'Lid', 0, 55, 1, (v) => Math.round(v) + '°').title = 'Grand lid angle (0° closed, 35° open stick)';
 
   humanRow = mkSlider($('playerSliders'), () => song.inst.human, (v) => { song.inst.human = v; if (player.playing && !rec.active) player.list = performance_(); }, 'Humanize', 0, 1, 0.01, pct);
   $('humanOn').addEventListener('change', (e) => {
@@ -621,11 +688,13 @@ function syncSongControls() {
   $('grid').value = song.grid;
   $('humanOn').checked = song.inst.humanOn !== 0;
   humanRow.classList.toggle('off', song.inst.humanOn === 0);
+  syncBodyControls();
   for (const r of sliders) r();
 }
 
 function setSong(s) {
   stop();
+  clearTimeout(boardTimer);
   song = s;
   undoStack.length = 0; redoStack.length = 0;
   roll.setSong(song);
@@ -782,9 +851,12 @@ async function exportWav() {
   try {
     const h = S.humanOf(song.inst);
     const list = h > 0 ? perform(song, { seed: (Math.random() * 0x7fffffff) | 0, human: h }) : S.compile(song);
-    download(wavBlob(await renderSong(song, list)), '.wav');
+    const buf = await renderSong(song, list, 48000, (p) => setBoardProgress({ active: true, p }));
+    setBoardProgress({ active: false, p: 1 });
+    download(wavBlob(buf), '.wav');
     toast('WAV exported');
   } catch (e) {
+    setBoardProgress({ active: false, p: 0 });
     console.error(e);
     toast('Export failed in this browser');
   }
@@ -794,6 +866,7 @@ async function exportWav() {
 
 async function boot() {
   audio.onNotice = (msg) => toast(msg, 5000);
+  audio.onBoardProgress = setBoardProgress;
   buildSettings();
   bindInput();
   roll.resize();

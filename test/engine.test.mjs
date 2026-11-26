@@ -336,3 +336,32 @@ test('bass strings pull along their length: longitudinal modes arrive before the
     assert.ok(rel < -6, `key ${m} at v=1: longitudinal 1.2-5 kHz is ${rel.toFixed(1)} dB against transverse`);
   }
 });
+
+// ---- high-fidelity mode -----------------------------------------------------------------
+
+test('in high-fidelity mode a single-string bass note has two decays and still damps cleanly', () => {
+  const rate = (x, t0, t1) => (db(rms(x, t0, t0 + 0.4)) - db(rms(x, t1, t1 + 0.4))) / (t1 - t0);
+  // E1 (key 28) has only one string: horizontal + vertical polarizations give it prompt + aftersound decay
+  const x = note(28, 0.7, 13, 0, { hiFi: 1, noise: 0 });
+  const early = rate(x, 0.2, 2.2), late = rate(x, 8, 12);
+  assert.ok(early > 2.5 * late && late > 0.4, `E1 hiFi: ${early.toFixed(2)} dB/s at first, ${late.toFixed(2)} dB/s after`);
+  const released = note(28, 0.7, 2.5, 0.6, { hiFi: 1, noise: 0 });
+  const drop = db(rms(x, 1.8, 2.2)) - db(rms(released, 1.8, 2.2));
+  assert.ok(drop > 35, `E1 hiFi damped: ${drop.toFixed(1)} dB down`);
+});
+
+test('in high-fidelity mode fractional strike taps smooth treble partials and keep C8 stable', () => {
+  const p3OverP1 = (m, hiFi) => steady(() => {
+    const x = withPiano({ detune: 0, uneven: 0, stiff: 0 }, () => note(m, 0.75, 0.25, 0, { hiFi, noise: 0 }));
+    const f0 = keyHz(m), B = inharmonicity(m), f3 = 3 * f0 * Math.sqrt((1 + 9 * B) / (1 + B));
+    return db(freqNear(x, f3, 0.01, 0.16, 0.05).mag) - db(freqNear(x, f0, 0.01, 0.16, 0.05).mag);
+  });
+  let jumpStd = 0, jumpHiFi = 0;
+  for (let m = 85; m <= 96; m++) {
+    jumpStd = Math.max(jumpStd, Math.abs(p3OverP1(m, 0) - p3OverP1(m - 1, 0)));
+    jumpHiFi = Math.max(jumpHiFi, Math.abs(p3OverP1(m, 1) - p3OverP1(m - 1, 1)));
+  }
+  assert.ok(jumpHiFi < 6 && jumpHiFi < 0.65 * jumpStd, `max P3/P1 step C6..C7: ${jumpHiFi.toFixed(1)} dB hiFi vs ${jumpStd.toFixed(1)} dB standard`);
+  const top = note(108, 1, 0.3, 0, { hiFi: 1, hard: 1 });
+  assert.ok(top.every(Number.isFinite) && peak(top) < 4, 'C8 at full strength in hiFi stays finite');
+});

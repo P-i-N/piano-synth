@@ -102,6 +102,11 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
 .roll canvas { position: absolute; left: 0; top: 0; display: block; }
 .rollbar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-top: 1px solid var(--line); background: var(--bg2); }
 .hint { color: var(--dim); font-size: 12.5px; margin-left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.boardprog { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.progtrack { width: 92px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.progfill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent2), var(--accent)); border-radius: inherit; transition: width .08s linear; }
+.panelprog { height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; margin: 0 0 8px; }
+.subhint { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .panel { flex: 0 0 290px; overflow-y: auto; border-left: 1px solid var(--line); background: var(--bg2); padding: 6px 12px 20px; }
 
 /* ---- side panel ---- */
@@ -113,11 +118,13 @@ summary {
 }
 summary::-webkit-details-marker { display: none; }
 .midibadge {
-  font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--dim);
+  font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--dim); font-variant-numeric: tabular-nums;
   display: inline-flex; align-items: center; gap: 5px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .midibadge::before { content: ""; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--line); transition: background .12s, box-shadow .12s; }
 .midibadge[data-state="ready"]::before { background: var(--green); }
+.midibadge[data-state="busy"] { color: var(--accent); }
+.midibadge[data-state="busy"]::before { background: var(--accent); animation: pulse .9s ease-in-out infinite; }
 .midibadge[data-active="1"]::before { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
 .seg { display: flex; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 2px; gap: 2px; margin-bottom: 10px; }
 .seg button { flex: 1; background: transparent; border: 0; border-radius: 7px; padding: 6px 2px; color: var(--dim); font-size: 13px; }

@@ -131,3 +131,16 @@ test('a song is whole bars long, at least four', () => {
   assert.equal(S.songTicks(s), 9 * 4 * S.PPQ);
   assert.equal(S.songEnd(s), 8 * 4 * S.PPQ + 10);
 });
+
+test('high-fidelity and soundboard body settings round-trip in links and presets', async () => {
+  const s = S.newSong();
+  assert.equal(S.bodyPreset(s.inst), 'concert');
+  S.setBodyPreset(s.inst, 'imperial');
+  assert.equal(S.bodyPreset(s.inst), 'imperial');
+  s.inst.hiFi = 1;
+  s.inst.bodyLid = 12;
+  assert.equal(S.bodyPreset(s.inst), '');
+  const link = await S.encodeSong(s);
+  const back = await S.decodeSong(link);
+  assert.deepEqual(back.inst, s.inst);
+});

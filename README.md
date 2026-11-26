@@ -12,6 +12,7 @@ Draw notes, press play, copy the page address to share it: the whole song (notes
 - A velocity lane, a sustain-pedal lane, a loop region in the bar ruler, a playhead
 - A keyboard under the roll: it shows the keys that sound while the song plays (stronger colour for a harder blow, green for strings held by the pedal alone), the notes under the pointer while nothing plays, and plays a note when a key is clicked
 - **WebMIDI** ([js/webmidi.js](js/webmidi.js)): play live from a MIDI keyboard and sustain pedal, record notes and pedal straight into the roll (**Rec** / `R`, waiting for your first key when stopped or punching in while playing), and choose input, channel and optional MIDI output
+- **High fidelity & customizable Body** ([js/worklet.js](js/worklet.js), [js/board/model.js](js/board/model.js)): toggle **High fidelity** in the Piano panel to upgrade the simulation itself (two polarizations per string, 4× sub-stepped hammer ODE, 4-point fractional strike taps, all 88 sympathetic keys, and a 14 kHz clamped-rim soundboard), and shape the **Body** (presets from Baby grand to Imperial grand plus Size, Spruce stiffness, Crown, Sustain and Lid angle) with a background recalculation progress bar and click-free convolver crossfading
 - **Humanize** (the switch next to the tempo, the amount in the Player panel): two hands and their fingers play the notes; timing and loudness drift, phrases breathe, the melody is brought out, the song slows into its last note. Off: the notes are played exactly as written
 - Convolution reverb with spaces from a small room to a cathedral, and tempo-synced ping-pong delay
 - MIDI file import (menu, or drop a `.mid` on the page): every track but the drums, with its sustain pedal ([js/midi.js](js/midi.js)). The song has one tempo: where the file changes tempo, the notes keep their place in time. A file that was played by a person is not humanized again
@@ -51,13 +52,12 @@ Nothing is sampled. Everything is computed live in an `AudioWorklet` ([js/workle
 
 ### Known limits of the model
 
-- At 48 kHz the top two octaves are too coarse: a string loop is 9 to 40 samples long there, and the hammer's striking point is a whole number of samples. (Measured before the felt and the loss were fitted; not measured again since.) From C6 up the levels of the upper partials change by up to 10 dB when the same note is computed at 96 kHz; the fundamental changes by less than 1 dB up to C7, and by 6 dB at C8. From C4 down, 48 and 192 kHz agree within 0.2 dB.
+- In standard mode (`High fidelity` off), at 48 kHz the top two octaves use whole-sample hammer strike taps, single-plane string motion (one decay on single-string bass notes A0–E1), 43 sympathetic strings, and soundboard modes up to 10 kHz. Turning **High fidelity** on switches to causal 4-point cubic Lagrange strike taps, 4× sub-stepped hammer–string integration, vertical + horizontal string polarizations, all 88 sympathetic keys, extended dispersion/longitudinal modes, and ~1500 clamped-rim soundboard modes up to 14 kHz (without changing the audio sample rate).
 - Against the recorded notes of a Steinway B (`node tools/notes.mjs`), nothing fitted yet:
   - From C6 up the change of tone with a harder blow is not matched (C6, 2–4 kHz: 0.4 dB for each dB of level, recorded 0.1), and the felt there is not fitted.
   - The decay is fitted to one take of one note in each octave; from 5 s on, C5 and C6 fall faster than the little that the recordings show above their noise.
-- No second direction of string motion: a single bass string (up to E1) has one decay, not two.
 - The soundboard is a rectangle with even stiffness: no real outline, no bridges or ribs as parts, no case, no air under the board. The strings do not feel it.
-- The tone is matched to one recording of other music than the demos; no recording of a demo's own notes has been compared yet. Above 10 kHz the board is not computed: it goes on at its mean level.
+- The tone is matched to one recording of other music than the demos; no recording of a demo's own notes has been compared yet.
 
 ## Comparing with a recording
 

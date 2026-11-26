@@ -19,13 +19,39 @@ export const isBlack = (m) => [1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12);
 // Snap grids: steps to a quarter note.
 export const GRIDS = [[1, '1/4'], [2, '1/8'], [3, '1/8 triplets'], [4, '1/16'], [6, '1/16 triplets'], [8, '1/32']];
 
-export const INSTRUMENT = { hard: 0, human: 1, humanOn: 1, noise: 1 };
+export const INSTRUMENT = {
+  hard: 0, human: 1, humanOn: 1, noise: 1,
+  hiFi: 0, bodySize: 1, bodyStiff: 0, bodyCrown: 38, bodyRes: 0, bodyLid: 35,
+};
 // Order of the settings in a link. New settings go at the end; a retired setting keeps its
 // place (null), so old links still load.
-const INST_KEYS = ['hard', 'human', 'humanOn', 'noise'];
+const INST_KEYS = ['hard', 'human', 'humanOn', 'noise', 'hiFi', 'bodySize', 'bodyStiff', 'bodyCrown', 'bodyRes', 'bodyLid'];
+const INST_RANGES = {
+  hard: [-1, 1], human: [0, 1], humanOn: [0, 1], noise: [0, 1], hiFi: [0, 1],
+  bodySize: [0.65, 1.45], bodyStiff: [-0.6, 0.6], bodyCrown: [20, 58], bodyRes: [-0.6, 0.6], bodyLid: [0, 55],
+};
 // How much of the player's feel is played: `human` is the amount, `humanOn` (1 or 0) the
 // switch next to the tempo. Switched off, the song is played exactly as written.
 export const humanOf = (inst) => (inst.humanOn === 0 ? 0 : inst.human);
+
+// Soundboard bodies: size (board and bridge scale), spruce stiffness, crown (Hz), sustain and lid (°).
+export const BODIES = {
+  concert: { name: 'Concert grand', bodySize: 1, bodyStiff: 0, bodyCrown: 38, bodyRes: 0, bodyLid: 35 },
+  parlour: { name: 'Parlour grand', bodySize: 0.86, bodyStiff: 0.08, bodyCrown: 42, bodyRes: -0.08, bodyLid: 32 },
+  baby: { name: 'Baby grand', bodySize: 0.72, bodyStiff: 0.15, bodyCrown: 48, bodyRes: -0.2, bodyLid: 25 },
+  imperial: { name: 'Imperial grand', bodySize: 1.18, bodyStiff: -0.05, bodyCrown: 33, bodyRes: 0.22, bodyLid: 40 },
+  studio: { name: 'Bright studio', bodySize: 0.96, bodyStiff: 0.35, bodyCrown: 40, bodyRes: -0.15, bodyLid: 48 },
+  vintage: { name: 'Warm vintage', bodySize: 1.04, bodyStiff: -0.32, bodyCrown: 30, bodyRes: 0.28, bodyLid: 14 },
+};
+const BODY_KEYS = ['bodySize', 'bodyStiff', 'bodyCrown', 'bodyRes', 'bodyLid'];
+export function bodyPreset(inst) {
+  const near = (a, b) => Math.abs(a - b) < 1e-3;
+  return Object.keys(BODIES).find((k) => BODY_KEYS.every((p) => near(BODIES[k][p], inst[p]))) || '';
+}
+export function setBodyPreset(inst, key) {
+  const b = BODIES[key];
+  if (b) for (const k of BODY_KEYS) inst[k] = b[k];
+}
 
 // Reverb spaces: mix, decay (RT60 in seconds) and tone. "Room" is the default.
 export const REVERBS = {
@@ -147,7 +173,11 @@ export function unpackSong(p) {
     const a = int(p.l[0], 0, 1e9, 0), b = int(p.l[1], 0, 1e9, 0);
     if (b > a) song.loop = [a, b];
   }
-  if (Array.isArray(p.i)) INST_KEYS.forEach((k, j) => { if (k) song.inst[k] = num(p.i[j], -1, 60, INSTRUMENT[k]); });
+  if (Array.isArray(p.i)) INST_KEYS.forEach((k, j) => {
+    if (!k) return;
+    const [lo, hi] = INST_RANGES[k];
+    song.inst[k] = k === 'hiFi' ? (num(p.i[j], 0, 1, 0) >= 0.5 ? 1 : 0) : num(p.i[j], lo, hi, INSTRUMENT[k]);
+  });
   if (Array.isArray(p.x)) {
     FX_KEYS.forEach((k, j) => {
       const d = FX_DEFAULTS[k], v = p.x[j];
